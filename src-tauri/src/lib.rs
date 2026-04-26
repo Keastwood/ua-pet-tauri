@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{
     env, fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
@@ -84,14 +84,23 @@ struct EffectiveLlmConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct InteractionRecord {
+    #[serde(default)]
     id: u64,
+    #[serde(default, alias = "timestamp_ms")]
     timestamp_ms: u64,
+    #[serde(default)]
     source: String,
+    #[serde(default)]
     area: Option<String>,
+    #[serde(default, alias = "x_percent")]
     x_percent: Option<f64>,
+    #[serde(default, alias = "y_percent")]
     y_percent: Option<f64>,
+    #[serde(default, alias = "user_text")]
     user_text: Option<String>,
+    #[serde(default, alias = "assistant_text")]
     assistant_text: String,
+    #[serde(default, alias = "llm_used")]
     llm_used: bool,
 }
 
@@ -99,12 +108,17 @@ struct InteractionRecord {
 #[serde(rename_all = "camelCase")]
 struct PetInteractionRequest {
     source: String,
+    #[serde(default)]
     area: Option<String>,
+    #[serde(default, alias = "x_percent")]
     x_percent: Option<f64>,
+    #[serde(default, alias = "y_percent")]
     y_percent: Option<f64>,
+    #[serde(default, alias = "user_text")]
     user_text: Option<String>,
     affection: u32,
     mood: String,
+    #[serde(default, alias = "scene_mode")]
     scene_mode: bool,
 }
 
@@ -221,8 +235,52 @@ fn load_interaction_history(app: &AppHandle) -> Result<Vec<InteractionRecord>, S
     }
 
     let text = fs::read_to_string(&path).map_err(|error| format!("读取交互历史失败：{error}"))?;
-    serde_json::from_str::<Vec<InteractionRecord>>(&text)
-        .map_err(|error| format!("解析交互历史失败：{error}"))
+    match serde_json::from_str::<Vec<InteractionRecord>>(&text) {
+        Ok(history) => Ok(normalize_interaction_history(history)),
+        Err(error) => {
+            backup_corrupt_interaction_history(&path);
+            eprintln!("Failed to parse interaction history, starting fresh: {error}");
+            Ok(Vec::new())
+        }
+    }
+}
+
+fn normalize_interaction_history(history: Vec<InteractionRecord>) -> Vec<InteractionRecord> {
+    history
+        .into_iter()
+        .filter_map(|mut record| {
+            record.source = record.source.trim().to_string();
+            if record.source.is_empty() {
+                record.source = "unknown".to_string();
+            }
+
+            if record.timestamp_ms == 0 {
+                record.timestamp_ms = now_ms();
+            }
+
+            record.area = clean_optional(record.area);
+            record.user_text = clean_optional(record.user_text);
+            record.assistant_text = record.assistant_text.trim().to_string();
+
+            if record.assistant_text.is_empty() && record.user_text.is_none() {
+                return None;
+            }
+
+            if record.assistant_text.is_empty() {
+                record.assistant_text = "（没有记录到回应）".to_string();
+            }
+
+            Some(record)
+        })
+        .collect()
+}
+
+fn backup_corrupt_interaction_history(path: &Path) {
+    let backup = path.with_file_name(format!(
+        "{INTERACTION_HISTORY_FILE}.corrupt-{}.bak",
+        now_ms()
+    ));
+    let _ = fs::rename(path, backup);
 }
 
 fn save_interaction_history(
@@ -232,7 +290,20 @@ fn save_interaction_history(
     let path = interaction_history_path(app)?;
     let text = serde_json::to_string_pretty(history)
         .map_err(|error| format!("序列化交互历史失败：{error}"))?;
-    fs::write(&path, text).map_err(|error| format!("保存交互历史失败：{error}"))
+    let tmp_path = path.with_file_name(format!("{INTERACTION_HISTORY_FILE}.tmp-{}", now_ms()));
+
+    fs::write(&tmp_path, text).map_err(|error| format!("保存交互历史临时文件失败：{error}"))?;
+
+    match fs::rename(&tmp_path, &path) {
+        Ok(()) => Ok(()),
+        Err(first_error) if path.exists() => {
+            fs::remove_file(&path)
+                .map_err(|error| format!("替换旧交互历史失败：{error}; 初始错误：{first_error}"))?;
+            fs::rename(&tmp_path, &path)
+                .map_err(|error| format!("保存交互历史失败：{error}"))
+        }
+        Err(error) => Err(format!("保存交互历史失败：{error}")),
+    }
 }
 
 fn append_interaction_history(

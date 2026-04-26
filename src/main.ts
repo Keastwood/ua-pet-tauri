@@ -61,11 +61,11 @@ interface InteractionRecord {
   id: number;
   timestampMs: number;
   source: string;
-  area?: string;
-  xPercent?: number;
-  yPercent?: number;
-  userText?: string;
-  assistantText: string;
+  area?: string | null;
+  xPercent?: number | null;
+  yPercent?: number | null;
+  userText?: string | null;
+  assistantText?: string | null;
   llmUsed: boolean;
 }
 
@@ -514,7 +514,7 @@ window.addEventListener("DOMContentLoaded", () => {
     };
   }
 
-  function getAreaLabel(area?: string): string {
+  function getAreaLabel(area?: string | null): string {
     if (area === "head") {
       return "头部";
     }
@@ -530,7 +530,7 @@ window.addEventListener("DOMContentLoaded", () => {
     return "文本";
   }
 
-  function getSourceLabel(source: string): string {
+  function getSourceLabel(source?: string | null): string {
     if (source === "click") {
       return "点击互动";
     }
@@ -543,11 +543,20 @@ window.addEventListener("DOMContentLoaded", () => {
       return "按钮互动";
     }
 
-    return source;
+    return source ?? "未知来源";
   }
 
   function formatRecordTime(timestampMs: number): string {
-    return new Date(timestampMs).toLocaleString("zh-CN", {
+    if (!Number.isFinite(timestampMs)) {
+      return "未知时间";
+    }
+
+    const date = new Date(timestampMs);
+    if (Number.isNaN(date.getTime())) {
+      return "未知时间";
+    }
+
+    return date.toLocaleString("zh-CN", {
       month: "2-digit",
       day: "2-digit",
       hour: "2-digit",
@@ -573,22 +582,30 @@ window.addEventListener("DOMContentLoaded", () => {
       const meta = document.createElement("div");
       meta.className = "history-meta";
       const details = [getSourceLabel(record.source), getAreaLabel(record.area)];
-      if (record.xPercent !== undefined && record.yPercent !== undefined) {
-        details.push(`${record.xPercent.toFixed(1)}%, ${record.yPercent.toFixed(1)}%`);
+      const xPercent = record.xPercent;
+      const yPercent = record.yPercent;
+      if (
+        typeof xPercent === "number" &&
+        Number.isFinite(xPercent) &&
+        typeof yPercent === "number" &&
+        Number.isFinite(yPercent)
+      ) {
+        details.push(`${xPercent.toFixed(1)}%, ${yPercent.toFixed(1)}%`);
       }
       details.push(record.llmUsed ? "LLM" : "本地");
       meta.textContent = `${formatRecordTime(record.timestampMs)} · ${details.join(" · ")}`;
 
       const assistant = document.createElement("p");
       assistant.className = "history-assistant";
-      assistant.textContent = record.assistantText;
+      assistant.textContent = record.assistantText?.trim() || "（没有记录到回应）";
 
       item.append(meta);
 
-      if (record.userText) {
+      const userText = record.userText?.trim();
+      if (userText) {
         const user = document.createElement("p");
         user.className = "history-user";
-        user.textContent = record.userText;
+        user.textContent = userText;
         item.append(user);
       }
 
