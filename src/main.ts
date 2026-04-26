@@ -112,6 +112,7 @@ const BASE_WINDOW_WIDTH = 430;
 const BASE_WINDOW_HEIGHT = 1080;
 const PET_ASSET_WIDTH = 1170;
 const PET_ASSET_HEIGHT = 2532;
+const PET_HIT_Y_CALIBRATION_PERCENT = 7.2;
 const MIN_SCALE = 0.75;
 const MAX_SCALE = 1.35;
 const SCALE_STEP = 0.05;
@@ -624,7 +625,8 @@ window.addEventListener("DOMContentLoaded", () => {
     const imageTop = petRect.bottom - renderedImageHeight;
 
     const xPercent = Math.min(100, Math.max(0, ((event.clientX - imageLeft) / renderedImageWidth) * 100));
-    const yPercent = Math.min(100, Math.max(0, ((event.clientY - imageTop) / renderedImageHeight) * 100));
+    const rawYPercent = ((event.clientY - imageTop) / renderedImageHeight) * 100;
+    const yPercent = Math.min(100, Math.max(0, rawYPercent + PET_HIT_Y_CALIBRATION_PERCENT));
     return {
       xPercent: Number(xPercent.toFixed(1)),
       yPercent: Number(yPercent.toFixed(1)),
