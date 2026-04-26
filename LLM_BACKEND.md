@@ -45,7 +45,11 @@ There are two prompt flows:
 
 Normal chat uses `llm_chat`. Its system prompt is currently defined in `src/main.ts` as `PET_LLM_SYSTEM_PROMPT`. This is a short desktop-pet persona prompt used when the user clicks the Chat button outside the full interaction mode.
 
-Pet interaction uses `llm_pet_interact`. Its default system prompt is defined in `src-tauri/src/lib.rs` as `DEFAULT_PET_INTERACTION_SYSTEM_PROMPT`, and can be overridden from the right-click settings page.
+Pet interaction uses `llm_pet_interact_stream` in the frontend path. It sends `stream: true` to the compatible chat completions API, emits `pet-interaction-stream` events while chunks arrive, then writes the final response into interaction history.
+
+The older `llm_pet_interact` command is still present as a non-streaming backend path, but the desktop interaction UI uses the streaming command.
+
+The default system prompt is defined in `src-tauri/src/lib.rs` as `DEFAULT_PET_INTERACTION_SYSTEM_PROMPT`, and can be overridden from the right-click settings page.
 
 Default pet interaction system prompt:
 
@@ -63,6 +67,8 @@ The pet interaction user prompt is generated in `src-tauri/src/lib.rs` by `forma
 - User text, if provided
 - Affection value, current mood, and scene mode
 
+Before the first stream chunk arrives, the frontend shows a thinking indicator cycling from `·` to `······`. Once the first delta arrives, the speech bubble switches to the streamed text.
+
 ## Interaction Tools
 
 The current selectable tools are defined in `src/main.ts` as `INTERACTION_TOOLS`:
@@ -75,7 +81,7 @@ The current selectable tools are defined in `src/main.ts` as `INTERACTION_TOOLS`
 - 梳子
 - 零食
 
-Click target mapping is defined in `src/main.ts` as `PET_HIT_AREA_RULES`. It maps click coordinates to semantic parts such as mouth, nose, eyes, face, hair, collar, bow, sleeve, sweater, and buttons.
+Click target mapping is defined in `src/main.ts` as `PET_HIT_AREA_RULES`. It maps click coordinates to semantic parts such as mouth, nose, eyes, face, hair, neck, shoulder, collarbone, chest, belly, waist, arm, and hand. The lower outfit-looking areas intentionally map to body-part semantics instead of clothing names.
 
 ## Environment Fallback
 

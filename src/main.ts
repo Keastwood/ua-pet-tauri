@@ -79,6 +79,15 @@ interface PetInteractionResponse {
   record: InteractionRecord;
 }
 
+interface PetInteractionStreamEvent {
+  streamId: string;
+  phase: "delta" | "done";
+  delta?: string | null;
+  content?: string | null;
+  record?: InteractionRecord | null;
+  error?: string | null;
+}
+
 interface PetPointerPosition {
   xPercent?: number;
   yPercent?: number;
@@ -137,17 +146,18 @@ const PET_HIT_AREA_RULES: PetHitAreaRule[] = [
   { label: "耳朵", shape: "ellipse", x: 72, y: 39.5, width: 10.5, height: 11.8 },
   { label: "左侧头发", shape: "rect", x: 6, y: 31, width: 22, height: 43 },
   { label: "右侧头发", shape: "rect", x: 74, y: 31, width: 20, height: 47 },
-  { label: "项圈", shape: "rect", x: 38, y: 58.5, width: 24, height: 6.5 },
-  { label: "衣领", shape: "rect", x: 22, y: 62.2, width: 56, height: 10.8 },
-  { label: "领结", shape: "ellipse", x: 33, y: 68.3, width: 34, height: 13.5 },
-  { label: "胸口徽章", shape: "ellipse", x: 44, y: 63.4, width: 12.5, height: 7 },
-  { label: "左胸口徽章", shape: "ellipse", x: 12, y: 75, width: 17, height: 8.5 },
-  { label: "上衣纽扣", shape: "ellipse", x: 45.2, y: 78.8, width: 10.5, height: 6.5 },
-  { label: "上衣纽扣", shape: "ellipse", x: 45.2, y: 89.5, width: 10.5, height: 6.5 },
-  { label: "左袖子", shape: "rect", x: 0, y: 64, width: 25, height: 36 },
-  { label: "右袖子", shape: "rect", x: 75, y: 64, width: 25, height: 36 },
-  { label: "衣摆", shape: "rect", x: 18, y: 91, width: 64, height: 9 },
-  { label: "毛衣", shape: "rect", x: 20, y: 72, width: 60, height: 28 },
+  { label: "脖子", shape: "rect", x: 38, y: 57.8, width: 24, height: 7.4 },
+  { label: "左肩", shape: "rect", x: 18, y: 62, width: 20, height: 8.5 },
+  { label: "右肩", shape: "rect", x: 62, y: 62, width: 20, height: 8.5 },
+  { label: "锁骨", shape: "rect", x: 34, y: 62, width: 32, height: 7.8 },
+  { label: "胸口", shape: "ellipse", x: 30, y: 65.5, width: 40, height: 14 },
+  { label: "左胸", shape: "ellipse", x: 11, y: 72.5, width: 18, height: 9 },
+  { label: "腹部", shape: "rect", x: 28, y: 76, width: 44, height: 12 },
+  { label: "腰部", shape: "rect", x: 20, y: 88, width: 60, height: 7.5 },
+  { label: "左手臂", shape: "rect", x: 0, y: 64, width: 25, height: 34 },
+  { label: "右手臂", shape: "rect", x: 75, y: 64, width: 25, height: 34 },
+  { label: "左手", shape: "rect", x: 0, y: 95, width: 18, height: 5 },
+  { label: "右手", shape: "rect", x: 82, y: 95, width: 18, height: 5 },
   { label: "头发", shape: "rect", x: 0, y: 18, width: 100, height: 40 },
 ];
 
@@ -805,6 +815,67 @@ window.addEventListener("DOMContentLoaded", () => {
     }, 180);
   }
 
+  function startThinkingDots(requestId: number): void {
+    clearTimer(state.bubbleTimeout);
+    let dotCount = 1;
+    bubble.dataset.show = "true";
+    bubble.dataset.tone = "warm";
+    bubble.textContent = "·";
+
+    state.bubbleTimeout = window.setInterval(() => {
+      if (requestId !== llmRequestId) {
+        clearTimer(state.bubbleTimeout);
+        return;
+      }
+
+      dotCount = dotCount >= 6 ? 1 : dotCount + 1;
+      bubble.textContent = "·".repeat(dotCount);
+    }, 180);
+  }
+
+  function startStreamingTalking(text: string): void {
+    clearTimer(state.surpriseTimeout);
+    clearTimer(state.talkInterval);
+    clearTimer(state.bubbleTimeout);
+    state.surprised = false;
+    state.talking = true;
+    setBaseExpression("idle");
+    blinkLayer.hidden = true;
+    mouthOLayer.hidden = true;
+
+    let flip = false;
+    talkLayer.hidden = false;
+    state.talkInterval = window.setInterval(() => {
+      flip = !flip;
+      talkLayer.hidden = !flip;
+      mouthOLayer.hidden = flip;
+    }, 120);
+
+    bubble.dataset.show = "true";
+    bubble.dataset.tone = "warm";
+    bubble.textContent = text || "·";
+    updateStatus();
+  }
+
+  function updateStreamingTalking(text: string): void {
+    bubble.dataset.show = "true";
+    bubble.dataset.tone = "warm";
+    bubble.textContent = text || "·";
+  }
+
+  function finishStreamingTalking(duration = 2400): void {
+    clearTimer(state.bubbleTimeout);
+    clearTimer(state.surpriseTimeout);
+
+    state.bubbleTimeout = window.setTimeout(() => {
+      bubble.dataset.show = "false";
+    }, duration + 400);
+
+    state.surpriseTimeout = window.setTimeout(() => {
+      resetFaceLayers();
+    }, duration);
+  }
+
   async function runLlmInteraction(
     source: string,
     area?: string,
@@ -815,11 +886,31 @@ window.addEventListener("DOMContentLoaded", () => {
     const { xPercent, yPercent } = getPetPointerPosition(event);
     const selectedTool = getInteractionTool(state.selectedInteractionTool);
     const interactionTool = source === "click" ? selectedTool.label : null;
-    const actionText = interactionTool && area ? `${interactionTool} -> ${area}` : "这次互动";
-    startTalking(`我记下来了：${actionText}，正在结合历史想一想。`, 1400);
+    const streamId = `${Date.now()}-${requestId}`;
+    let streamedContent = "";
+    let hasStreamed = false;
+    const unlisten = await listen<PetInteractionStreamEvent>("pet-interaction-stream", (event) => {
+      const payload = event.payload;
+      if (payload.streamId !== streamId || requestId !== llmRequestId) {
+        return;
+      }
+
+      if (payload.phase === "delta" && payload.delta) {
+        if (!hasStreamed) {
+          hasStreamed = true;
+          startStreamingTalking("");
+        }
+
+        streamedContent += payload.delta;
+        updateStreamingTalking(Array.from(streamedContent.replace(/\s+/g, " ")).slice(0, 90).join(""));
+      }
+    });
+
+    startThinkingDots(requestId);
 
     try {
-      const response = await invoke<PetInteractionResponse>("llm_pet_interact", {
+      const response = await invoke<PetInteractionResponse>("llm_pet_interact_stream", {
+        streamId,
         request: {
           source,
           interactionTool,
@@ -837,7 +928,13 @@ window.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
-      startTalking(normalizeLlmReply(response.content), response.record.llmUsed ? 2400 : 2600);
+      const reply = normalizeLlmReply(response.content);
+      if (!hasStreamed) {
+        startStreamingTalking(reply);
+      } else {
+        updateStreamingTalking(reply);
+      }
+      finishStreamingTalking(response.record.llmUsed ? 2400 : 2600);
 
       if (!historyPanel.hidden) {
         void refreshHistory();
@@ -847,6 +944,8 @@ window.addEventListener("DOMContentLoaded", () => {
       if (requestId === llmRequestId) {
         startTalking("这次互动记录失败了，我先把反应留在心里。", 2200);
       }
+    } finally {
+      unlisten();
     }
   }
 

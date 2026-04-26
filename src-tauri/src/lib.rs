@@ -1,3 +1,4 @@
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::{
     env, fs,
@@ -139,6 +140,17 @@ struct PetInteractionResponse {
     record: InteractionRecord,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PetInteractionStreamEvent {
+    stream_id: String,
+    phase: String,
+    delta: Option<String>,
+    content: Option<String>,
+    record: Option<InteractionRecord>,
+    error: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LlmUsage {
@@ -165,9 +177,21 @@ struct OpenAiCompatibleChatResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct OpenAiCompatibleStreamResponse {
+    choices: Vec<OpenAiCompatibleStreamChoice>,
+}
+
+#[derive(Debug, Deserialize)]
 struct OpenAiCompatibleChoice {
     message: OpenAiCompatibleMessage,
     finish_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiCompatibleStreamChoice {
+    delta: Option<OpenAiCompatibleMessage>,
+    message: Option<OpenAiCompatibleMessage>,
+    text: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -502,6 +526,69 @@ fn extract_message_text(message: &OpenAiCompatibleMessage) -> String {
     String::new()
 }
 
+fn extract_stream_choice_text(choice: OpenAiCompatibleStreamChoice) -> String {
+    if let Some(message) = choice.delta {
+        let content = extract_message_text(&message);
+        if !content.is_empty() {
+            return content;
+        }
+    }
+
+    if let Some(message) = choice.message {
+        let content = extract_message_text(&message);
+        if !content.is_empty() {
+            return content;
+        }
+    }
+
+    choice
+        .text
+        .as_ref()
+        .map(content_value_to_text)
+        .map(|content| clean_model_text(&content))
+        .unwrap_or_default()
+}
+
+fn sse_frame_end(buffer: &str) -> Option<(usize, usize)> {
+    buffer
+        .find("\r\n\r\n")
+        .map(|position| (position, 4))
+        .or_else(|| buffer.find("\n\n").map(|position| (position, 2)))
+}
+
+fn parse_stream_frame(frame: &str) -> Vec<String> {
+    frame
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("data:").map(str::trim))
+        .filter(|data| !data.is_empty() && *data != "[DONE]")
+        .filter_map(|data| serde_json::from_str::<OpenAiCompatibleStreamResponse>(data).ok())
+        .flat_map(|parsed| parsed.choices.into_iter().map(extract_stream_choice_text))
+        .filter(|content| !content.is_empty())
+        .collect()
+}
+
+fn emit_pet_interaction_stream(
+    app: &AppHandle,
+    stream_id: &str,
+    phase: &str,
+    delta: Option<String>,
+    content: Option<String>,
+    record: Option<InteractionRecord>,
+    error: Option<String>,
+) {
+    let _ = app.emit(
+        "pet-interaction-stream",
+        PetInteractionStreamEvent {
+            stream_id: stream_id.to_string(),
+            phase: phase.to_string(),
+            delta,
+            content,
+            record,
+            error,
+        },
+    );
+}
+
 fn format_history_for_prompt(history: &[InteractionRecord]) -> String {
     if history.is_empty() {
         return "暂无历史。".to_string();
@@ -734,6 +821,192 @@ async fn llm_pet_interact(
 }
 
 #[tauri::command]
+async fn llm_pet_interact_stream(
+    app: AppHandle,
+    stream_id: String,
+    request: PetInteractionRequest,
+) -> Result<PetInteractionResponse, String> {
+    let history = load_interaction_history(&app)?;
+    let prompt = format!(
+        "最近交互历史：\n{}\n\n{}",
+        format_history_for_prompt(&history),
+        describe_pet_interaction(&request)
+    );
+
+    let mut llm_used = false;
+    let assistant_text = match effective_llm_config(&app, None) {
+        Ok(config) => {
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(config.timeout_secs))
+                .build()
+                .map_err(|error| format!("创建 LLM HTTP 客户端失败：{error}"))?;
+            let messages = vec![
+                LlmMessage {
+                    role: "system".to_string(),
+                    content: config.pet_interaction_system_prompt.clone(),
+                },
+                LlmMessage {
+                    role: "user".to_string(),
+                    content: prompt,
+                },
+            ];
+            let payload = OpenAiCompatibleChatRequest {
+                model: &config.model,
+                messages: &messages,
+                stream: true,
+                temperature: Some(0.82),
+                max_tokens: Some(180),
+            };
+
+            match client
+                .post(chat_completions_url(&config.base_url))
+                .bearer_auth(config.api_key)
+                .json(&payload)
+                .send()
+                .await
+            {
+                Ok(response) => {
+                    let status = response.status();
+                    if !status.is_success() {
+                        match response.text().await {
+                            Ok(body) => format!(
+                                "外脑暂时卡住了：{}",
+                                truncate_error_body(&body).chars().take(36).collect::<String>()
+                            ),
+                            Err(_) => "外脑有回应，但我没能读清楚。".to_string(),
+                        }
+                    } else {
+                        let mut content = String::new();
+                        let mut buffer = String::new();
+                        let mut stream = response.bytes_stream();
+
+                        while let Some(chunk) = stream.next().await {
+                            match chunk {
+                                Ok(bytes) => {
+                                    buffer.push_str(&String::from_utf8_lossy(&bytes));
+
+                                    while let Some((end, skip)) = sse_frame_end(&buffer) {
+                                        let frame = buffer[..end].to_string();
+                                        buffer = buffer[end + skip..].to_string();
+
+                                        for delta in parse_stream_frame(&frame) {
+                                            llm_used = true;
+                                            content.push_str(&delta);
+                                            emit_pet_interaction_stream(
+                                                &app,
+                                                &stream_id,
+                                                "delta",
+                                                Some(delta),
+                                                None,
+                                                None,
+                                                None,
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(_) => {
+                                    return Ok(finalize_pet_interaction(
+                                        &app,
+                                        &stream_id,
+                                        request,
+                                        "外脑流式连线中断了，我先靠本能陪你一下。".to_string(),
+                                        false,
+                                    )?);
+                                }
+                            }
+                        }
+
+                        for delta in parse_stream_frame(&buffer) {
+                            llm_used = true;
+                            content.push_str(&delta);
+                            emit_pet_interaction_stream(
+                                &app,
+                                &stream_id,
+                                "delta",
+                                Some(delta),
+                                None,
+                                None,
+                                None,
+                            );
+                        }
+
+                        if content.is_empty() {
+                            if let Ok(parsed) =
+                                serde_json::from_str::<OpenAiCompatibleChatResponse>(buffer.trim())
+                            {
+                                if let Some(choice) = parsed.choices.into_iter().next() {
+                                    let parsed_content = extract_message_text(&choice.message);
+                                    if !parsed_content.is_empty() {
+                                        llm_used = true;
+                                        emit_pet_interaction_stream(
+                                            &app,
+                                            &stream_id,
+                                            "delta",
+                                            Some(parsed_content.clone()),
+                                            None,
+                                            None,
+                                            None,
+                                        );
+                                        content = parsed_content;
+                                    }
+                                }
+                            }
+                        }
+
+                        if content.is_empty() {
+                            "我刚刚听见了，但外脑没吐出一句完整的话。".to_string()
+                        } else {
+                            clean_model_text(&content)
+                        }
+                    }
+                }
+                Err(_) => "外脑连线失败了，我先靠本能陪你一下。".to_string(),
+            }
+        }
+        Err(_) => "右键我打开设置页，填好 API 后就能记录并思考互动啦。".to_string(),
+    };
+
+    finalize_pet_interaction(&app, &stream_id, request, assistant_text, llm_used)
+}
+
+fn finalize_pet_interaction(
+    app: &AppHandle,
+    stream_id: &str,
+    request: PetInteractionRequest,
+    assistant_text: String,
+    llm_used: bool,
+) -> Result<PetInteractionResponse, String> {
+    let record = InteractionRecord {
+        id: 0,
+        timestamp_ms: now_ms(),
+        source: request.source,
+        interaction_tool: clean_optional(request.interaction_tool),
+        area: clean_optional(request.area),
+        x_percent: request.x_percent,
+        y_percent: request.y_percent,
+        user_text: clean_optional(request.user_text),
+        assistant_text: assistant_text.clone(),
+        llm_used,
+    };
+    let record = append_interaction_history(app, record)?;
+
+    emit_pet_interaction_stream(
+        app,
+        stream_id,
+        "done",
+        None,
+        Some(assistant_text.clone()),
+        Some(record.clone()),
+        None,
+    );
+
+    Ok(PetInteractionResponse {
+        content: assistant_text,
+        record,
+    })
+}
+
+#[tauri::command]
 async fn llm_chat(app: AppHandle, request: LlmChatRequest) -> Result<LlmChatResponse, String> {
     validate_llm_request(&request)?;
 
@@ -942,6 +1215,7 @@ pub fn run() {
             get_interaction_history,
             llm_chat,
             llm_pet_interact,
+            llm_pet_interact_stream,
             save_llm_config,
             move_pet_window,
             resize_pet_window,
