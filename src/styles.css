@@ -449,7 +449,8 @@ button {
   font-size: 11px;
 }
 
-.interaction-tools {
+.interaction-tools,
+.skin-switcher {
   width: min(100%, 392px);
   margin: 0 auto 10px;
   border: 1px solid rgba(94, 145, 180, 0.2);
@@ -463,7 +464,16 @@ button {
     0 14px 32px rgba(41, 83, 114, 0.12);
 }
 
-.interaction-tools__copy {
+.skin-switcher {
+  border-color: rgba(167, 131, 176, 0.22);
+  background:
+    radial-gradient(circle at 16% 0%, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0) 42%),
+    radial-gradient(circle at 88% 100%, rgba(246, 204, 219, 0.28), rgba(246, 204, 219, 0) 36%),
+    linear-gradient(150deg, rgba(255, 250, 251, 0.76), rgba(234, 246, 250, 0.58));
+}
+
+.interaction-tools__copy,
+.skin-switcher__copy {
   display: flex;
   justify-content: space-between;
   gap: 12px;
@@ -474,19 +484,22 @@ button {
   letter-spacing: 0.08em;
 }
 
-.interaction-tools__copy strong {
+.interaction-tools__copy strong,
+.skin-switcher__copy strong {
   color: var(--ink);
   letter-spacing: 0;
 }
 
-.interaction-tools__buttons {
+.interaction-tools__buttons,
+.skin-switcher__buttons {
   display: flex;
   gap: 7px;
   overflow-x: auto;
   padding-bottom: 2px;
 }
 
-.interaction-tool-btn {
+.interaction-tool-btn,
+.skin-switcher__btn {
   flex: 0 0 auto;
   border: 1px solid rgba(94, 145, 180, 0.24);
   border-radius: 999px;
@@ -499,7 +512,8 @@ button {
   font-weight: 800;
 }
 
-.interaction-tool-btn[aria-pressed="true"] {
+.interaction-tool-btn[aria-pressed="true"],
+.skin-switcher__btn[aria-pressed="true"] {
   color: white;
   border-color: rgba(48, 98, 132, 0.4);
   background: linear-gradient(135deg, #6cb6d8, #3c7ca5);
@@ -598,8 +612,8 @@ button {
 .pet {
   position: relative;
   z-index: 3;
-  width: 350px;
-  height: 758px;
+  width: var(--pet-visual-width, 350px);
+  height: var(--pet-visual-height, 758px);
   transform-origin: 50% 92%;
   animation: drift 4.8s ease-in-out infinite;
   cursor: grab;
@@ -641,13 +655,13 @@ button {
 #mouth-o-layer {
   z-index: 4;
   -webkit-mask-image: radial-gradient(
-    ellipse 9.8% 2.8% at 50.4% 42.7%,
+    ellipse var(--mouth-mask-width, 9.8%) var(--mouth-mask-height, 2.8%) at var(--mouth-mask-x, 50.4%) var(--mouth-mask-y, 42.7%),
     #000 0 84%,
     rgba(0, 0, 0, 0.72) 90%,
     transparent 100%
   );
   mask-image: radial-gradient(
-    ellipse 9.8% 2.8% at 50.4% 42.7%,
+    ellipse var(--mouth-mask-width, 9.8%) var(--mouth-mask-height, 2.8%) at var(--mouth-mask-x, 50.4%) var(--mouth-mask-y, 42.7%),
     #000 0 84%,
     rgba(0, 0, 0, 0.72) 90%,
     transparent 100%

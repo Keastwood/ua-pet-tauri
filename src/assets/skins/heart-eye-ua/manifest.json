@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "heart-eye-ua",
+  "name": "爱心眼 UA",
+  "layout": "fullBody",
+  "width": 710,
+  "height": 1536,
+  "hitCalibrationY": 0,
+  "generatedAt": "2026-04-26T21:02:21.563Z",
+  "generator": {
+    "command": "npm run skin:generate",
+    "background": "edge-transparent",
+    "tolerance": 34,
+    "removedPixels": 211440
+  },
+  "assets": {
+    "idle": "idle.png",
+    "surprised": "surprised.png",
+    "blink": "blink_overlay.png",
+    "mouthTalk": "mouth_talk_overlay.png",
+    "mouthO": "mouth_o_overlay.png"
+  }
+}

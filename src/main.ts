@@ -1,11 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-import idleBase from "./assets/pet/full_idle_smile.png";
-import surpriseBase from "./assets/pet/full_surprised_original.png";
-import blinkOverlay from "./assets/pet/eyes_blink_overlay.png";
-import mouthTalkOverlay from "./assets/pet/mouth_talk_overlay.png";
-import mouthOOverlay from "./assets/pet/mouth_o_overlay.png";
+import { DEFAULT_PET_SKIN_ID, PET_SKINS, getPetSkin } from "./skins";
+import type { PetSkinDefinition, PetSkinLayoutId } from "./skinTypes";
 
 type Tone = "warm" | "alert" | "hint";
 type BaseExpression = "idle" | "surprised";
@@ -16,6 +13,7 @@ interface PetState {
   alwaysOnTop: boolean;
   llmInteractionMode: boolean;
   selectedInteractionTool: InteractionToolId;
+  selectedSkinId: string;
   talking: boolean;
   surprised: boolean;
   scale: number;
@@ -110,9 +108,6 @@ interface InteractionTool {
 
 const BASE_WINDOW_WIDTH = 430;
 const BASE_WINDOW_HEIGHT = 1080;
-const PET_ASSET_WIDTH = 1170;
-const PET_ASSET_HEIGHT = 2532;
-const PET_HIT_Y_CALIBRATION_PERCENT = 7.2;
 const MIN_SCALE = 0.75;
 const MAX_SCALE = 1.35;
 const SCALE_STEP = 0.05;
@@ -120,6 +115,7 @@ const SCALE_STORAGE_KEY = "silver-pet.scale.v2";
 const SCENE_MODE_STORAGE_KEY = "silver-pet.scene-mode.v1";
 const LLM_INTERACTION_MODE_STORAGE_KEY = "silver-pet.llm-interaction-mode.v1";
 const INTERACTION_TOOL_STORAGE_KEY = "silver-pet.interaction-tool.v1";
+const PET_SKIN_STORAGE_KEY = "silver-pet.skin.v1";
 const PET_LLM_SYSTEM_PROMPT =
   "你是一个银白发桌宠，会陪用户工作和休息。请用中文回复，语气温柔、俏皮、像桌宠在说话。每次只说一句，控制在 36 个汉字以内，不要解释，不要加引号。";
 
@@ -133,7 +129,7 @@ const INTERACTION_TOOLS: InteractionTool[] = [
   { id: "snack", label: "零食", verb: "投喂" },
 ];
 
-const PET_HIT_AREA_RULES: PetHitAreaRule[] = [
+const HALF_BODY_HIT_AREA_RULES: PetHitAreaRule[] = [
   { label: "嘴巴", shape: "ellipse", x: 43.5, y: 47.2, width: 14, height: 5.4 },
   { label: "鼻尖", shape: "ellipse", x: 47.7, y: 43.7, width: 5.4, height: 5.8 },
   { label: "左脸颊", shape: "ellipse", x: 27.5, y: 42.2, width: 16, height: 10.5 },
@@ -164,11 +160,50 @@ const PET_HIT_AREA_RULES: PetHitAreaRule[] = [
   { label: "头发", shape: "rect", x: 0, y: 18, width: 100, height: 40 },
 ];
 
+const FULL_BODY_HIT_AREA_RULES: PetHitAreaRule[] = [
+  { label: "嘴巴", shape: "ellipse", x: 44, y: 36.6, width: 14, height: 4.6 },
+  { label: "鼻尖", shape: "ellipse", x: 48, y: 31.8, width: 5, height: 5.2 },
+  { label: "左眼", shape: "ellipse", x: 31, y: 26.4, width: 18, height: 6.6 },
+  { label: "右眼", shape: "ellipse", x: 52, y: 26.4, width: 18, height: 6.6 },
+  { label: "左脸颊", shape: "ellipse", x: 25, y: 31.2, width: 17, height: 8.8 },
+  { label: "右脸颊", shape: "ellipse", x: 59, y: 31.2, width: 17, height: 8.8 },
+  { label: "脸", shape: "ellipse", x: 26, y: 22.4, width: 48, height: 20 },
+  { label: "光环", shape: "ellipse", x: 3, y: 0.8, width: 43, height: 10 },
+  { label: "头顶", shape: "ellipse", x: 25, y: 10.5, width: 52, height: 15 },
+  { label: "刘海", shape: "rect", x: 31, y: 19.5, width: 38, height: 8 },
+  { label: "左耳", shape: "ellipse", x: 20, y: 28.5, width: 8, height: 9 },
+  { label: "右耳", shape: "ellipse", x: 71, y: 27.8, width: 9, height: 10 },
+  { label: "左侧头发", shape: "rect", x: 6, y: 23, width: 20, height: 49 },
+  { label: "右侧头发", shape: "rect", x: 75, y: 22, width: 20, height: 49 },
+  { label: "脖子", shape: "rect", x: 40, y: 40.2, width: 21, height: 6.2 },
+  { label: "左肩", shape: "rect", x: 12, y: 45.5, width: 25, height: 7 },
+  { label: "右肩", shape: "rect", x: 63, y: 45.5, width: 25, height: 7 },
+  { label: "胸口", shape: "ellipse", x: 27, y: 49, width: 46, height: 12 },
+  { label: "左胸", shape: "ellipse", x: 20, y: 54.5, width: 24, height: 11 },
+  { label: "右胸", shape: "ellipse", x: 56, y: 54.5, width: 24, height: 11 },
+  { label: "双手", shape: "ellipse", x: 35, y: 50.5, width: 31, height: 12 },
+  { label: "左手臂", shape: "rect", x: 0, y: 48, width: 30, height: 31 },
+  { label: "右手臂", shape: "rect", x: 70, y: 48, width: 30, height: 31 },
+  { label: "腹部", shape: "rect", x: 34, y: 65.5, width: 32, height: 12 },
+  { label: "肚脐", shape: "ellipse", x: 45, y: 77.2, width: 10, height: 5 },
+  { label: "腰部", shape: "rect", x: 26, y: 80, width: 48, height: 7 },
+  { label: "胯部", shape: "ellipse", x: 28, y: 85.5, width: 44, height: 9 },
+  { label: "左大腿", shape: "rect", x: 25, y: 91, width: 21, height: 9 },
+  { label: "右大腿", shape: "rect", x: 54, y: 91, width: 21, height: 9 },
+  { label: "头发", shape: "rect", x: 0, y: 10, width: 100, height: 34 },
+];
+
+const PET_HIT_AREA_RULES_BY_LAYOUT: Record<PetSkinLayoutId, PetHitAreaRule[]> = {
+  halfBody: HALF_BODY_HIT_AREA_RULES,
+  fullBody: FULL_BODY_HIT_AREA_RULES,
+};
+
 const state: PetState = {
   affection: 0,
   alwaysOnTop: true,
   llmInteractionMode: false,
   selectedInteractionTool: "finger",
+  selectedSkinId: DEFAULT_PET_SKIN_ID,
   talking: false,
   surprised: false,
   scale: 1,
@@ -209,6 +244,10 @@ function pick<T>(items: readonly T[]): T {
 
 function getInteractionTool(id: string | null | undefined): InteractionTool {
   return INTERACTION_TOOLS.find((tool) => tool.id === id) ?? INTERACTION_TOOLS[0];
+}
+
+function getHitAreaRules(skin: PetSkinDefinition): PetHitAreaRule[] {
+  return PET_HIT_AREA_RULES_BY_LAYOUT[skin.layout] ?? HALF_BODY_HIT_AREA_RULES;
 }
 
 function must<T extends HTMLElement>(selector: string): T {
@@ -316,31 +355,67 @@ window.addEventListener("DOMContentLoaded", () => {
   const interactionToolButtons = Array.from(
     document.querySelectorAll<HTMLButtonElement>(".interaction-tool-btn[data-tool]"),
   );
+  const skinValue = must<HTMLElement>("#skin-value");
+  const skinButtons = must<HTMLDivElement>("#skin-buttons");
   const fxLayer = must<HTMLDivElement>("#fx-layer");
   const baseLayer = must<HTMLImageElement>("#base-layer");
   const blinkLayer = must<HTMLImageElement>("#blink-layer");
   const talkLayer = must<HTMLImageElement>("#talk-layer");
   const mouthOLayer = must<HTMLImageElement>("#mouth-o-layer");
   let llmRequestId = 0;
+  let activeSkin = getPetSkin(state.selectedSkinId);
 
-  baseLayer.src = idleBase;
-  blinkLayer.src = blinkOverlay;
-  talkLayer.src = mouthTalkOverlay;
-  mouthOLayer.src = mouthOOverlay;
+  function preloadSkin(skin: PetSkinDefinition): void {
+    const sources = [
+      skin.images.idle,
+      skin.images.surprised,
+      skin.images.blink,
+      skin.images.mouthTalk,
+      skin.images.mouthO,
+    ];
 
-  const expressionSrc: Record<BaseExpression, string> = {
-    idle: idleBase,
-    surprised: surpriseBase,
-  };
+    for (const src of sources) {
+      const image = new Image();
+      image.src = src;
+    }
+  }
 
-  for (const src of Object.values(expressionSrc)) {
-    const image = new Image();
-    image.src = src;
+  function applySkinVisuals(skin: PetSkinDefinition): void {
+    activeSkin = skin;
+    petRoot.dataset.skinLayout = skin.layout;
+    petRoot.style.setProperty("--pet-aspect-height", String(skin.assetHeight / skin.assetWidth));
+    petRoot.style.setProperty("--pet-visual-height", `${(350 * skin.assetHeight) / skin.assetWidth}px`);
+    petRoot.style.setProperty("--mouth-mask-x", skin.layout === "fullBody" ? "51%" : "50.4%");
+    petRoot.style.setProperty("--mouth-mask-y", skin.layout === "fullBody" ? "37.4%" : "42.7%");
+    petRoot.style.setProperty("--mouth-mask-width", skin.layout === "fullBody" ? "8.8%" : "9.8%");
+    petRoot.style.setProperty("--mouth-mask-height", skin.layout === "fullBody" ? "2.5%" : "2.8%");
+    blinkLayer.src = skin.images.blink;
+    talkLayer.src = skin.images.mouthTalk;
+    mouthOLayer.src = skin.images.mouthO;
+    setBaseExpression(state.surprised ? "surprised" : "idle");
+    preloadSkin(skin);
   }
 
   function setBaseExpression(expression: BaseExpression): void {
-    baseLayer.src = expressionSrc[expression];
+    baseLayer.src = expression === "surprised" ? activeSkin.images.surprised : activeSkin.images.idle;
     baseLayer.dataset.expression = expression;
+  }
+
+  function renderSkinButtons(): void {
+    skinButtons.replaceChildren();
+
+    for (const skin of PET_SKINS) {
+      const button = document.createElement("button");
+      button.className = "skin-switcher__btn";
+      button.type = "button";
+      button.dataset.skin = skin.id;
+      button.textContent = skin.name;
+      button.setAttribute("aria-pressed", String(skin.id === state.selectedSkinId));
+      button.addEventListener("click", () => {
+        setPetSkin(skin.id, { announce: true });
+      });
+      skinButtons.appendChild(button);
+    }
   }
 
   function updateStatus(): void {
@@ -366,6 +441,28 @@ window.addEventListener("DOMContentLoaded", () => {
     interactionToolValue.textContent = selectedTool.label;
     for (const button of interactionToolButtons) {
       button.setAttribute("aria-pressed", String(button.dataset.tool === selectedTool.id));
+    }
+
+    const selectedSkin = getPetSkin(state.selectedSkinId);
+    skinValue.textContent = selectedSkin.name;
+    for (const button of skinButtons.querySelectorAll<HTMLButtonElement>(".skin-switcher__btn[data-skin]")) {
+      button.setAttribute("aria-pressed", String(button.dataset.skin === selectedSkin.id));
+    }
+  }
+
+  function setPetSkin(skinId: string | null | undefined, options: { persist?: boolean; announce?: boolean } = {}): void {
+    const skin = getPetSkin(skinId);
+    state.selectedSkinId = skin.id;
+    applySkinVisuals(skin);
+
+    if (options.persist ?? true) {
+      localStorage.setItem(PET_SKIN_STORAGE_KEY, skin.id);
+    }
+
+    updateStatus();
+
+    if (options.announce) {
+      setBubble(`已换成 ${skin.name}，部位映射使用${skin.layout === "fullBody" ? "全身立绘" : "半身"}版。`, "hint", 2100);
     }
   }
 
@@ -622,13 +719,13 @@ window.addEventListener("DOMContentLoaded", () => {
 
     const petRect = petRoot.getBoundingClientRect();
     const renderedImageWidth = petRect.width;
-    const renderedImageHeight = renderedImageWidth * (PET_ASSET_HEIGHT / PET_ASSET_WIDTH);
+    const renderedImageHeight = renderedImageWidth * (activeSkin.assetHeight / activeSkin.assetWidth);
     const imageLeft = petRect.left;
     const imageTop = petRect.bottom - renderedImageHeight;
 
     const xPercent = Math.min(100, Math.max(0, ((event.clientX - imageLeft) / renderedImageWidth) * 100));
     const rawYPercent = ((event.clientY - imageTop) / renderedImageHeight) * 100;
-    const yPercent = Math.min(100, Math.max(0, rawYPercent + PET_HIT_Y_CALIBRATION_PERCENT));
+    const yPercent = Math.min(100, Math.max(0, rawYPercent + (activeSkin.hitCalibrationY ?? 0)));
     return {
       xPercent: Number(xPercent.toFixed(1)),
       yPercent: Number(yPercent.toFixed(1)),
@@ -658,7 +755,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function resolvePetHitArea(event: MouseEvent | undefined, fallback: string): string {
     const position = getPetPointerPosition(event);
-    const matchedRule = PET_HIT_AREA_RULES.find((rule) => isPointInHitRule(position, rule));
+    const matchedRule = getHitAreaRules(activeSkin).find((rule) => isPointInHitRule(position, rule));
     return matchedRule?.label ?? fallback;
   }
 
@@ -1319,7 +1416,7 @@ window.addEventListener("DOMContentLoaded", () => {
     "wheel",
     (event) => {
       const target = event.target as HTMLElement;
-      if (target.closest(".control-row") || target.closest(".interaction-tools")) {
+      if (target.closest(".control-row") || target.closest(".interaction-tools") || target.closest(".skin-switcher")) {
         return;
       }
       event.preventDefault();
@@ -1403,6 +1500,7 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  renderSkinButtons();
   updateStatus();
   bubble.dataset.show = "false";
   blinkLayer.hidden = true;
@@ -1415,7 +1513,9 @@ window.addEventListener("DOMContentLoaded", () => {
   const savedLlmInteractionMode = localStorage.getItem(LLM_INTERACTION_MODE_STORAGE_KEY) === "1";
   const savedSceneMode = localStorage.getItem(SCENE_MODE_STORAGE_KEY) === "1";
   const savedInteractionTool = localStorage.getItem(INTERACTION_TOOL_STORAGE_KEY);
+  const savedSkin = localStorage.getItem(PET_SKIN_STORAGE_KEY);
 
+  setPetSkin(savedSkin, { persist: false });
   setSceneMode(savedSceneMode, { persist: false });
   setLlmInteractionMode(savedLlmInteractionMode, { persist: false });
   setInteractionTool(savedInteractionTool, { persist: false });
