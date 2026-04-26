@@ -62,8 +62,8 @@ button {
 
 .speech-bubble {
   position: absolute;
-  top: 22px;
-  left: 50%;
+  top: var(--bubble-top, 22px);
+  left: var(--bubble-left, 50%);
   z-index: 80;
   width: min(100%, 310px);
   padding: 14px 16px;
@@ -1244,6 +1244,48 @@ button {
   gap: 8px;
 }
 
+.skin-favorite-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.skin-favorite-item {
+  display: grid;
+  grid-template-columns: auto 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid rgba(94, 145, 180, 0.2);
+  border-radius: 16px;
+  padding: 7px 8px;
+  color: rgba(24, 54, 75, 0.76);
+  background: rgba(255, 255, 255, 0.54);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.skin-favorite-item input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent-deep);
+}
+
+.skin-favorite-item img {
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  object-fit: cover;
+  object-position: 50% 18%;
+}
+
+.skin-favorite-item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .settings-hint {
   margin: 0;
   color: rgba(24, 54, 75, 0.62);
@@ -1298,8 +1340,11 @@ button {
   border-radius: 18px;
 }
 
+.side-dock .skin-switcher {
+  position: relative;
+}
+
 .side-dock .interaction-tools__buttons,
-.side-dock .skin-switcher__buttons,
 .side-dock .control-row {
   display: grid;
   grid-template-columns: 1fr;
@@ -1311,13 +1356,56 @@ button {
 }
 
 .side-dock .skin-switcher__buttons {
-  max-height: 172px;
-  overflow-y: auto;
-  scrollbar-width: none;
+  position: relative;
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
 }
 
-.side-dock .skin-switcher__buttons::-webkit-scrollbar {
+.side-dock .skin-switcher__favorites {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 5px;
+}
+
+.side-dock .skin-switcher__extras {
+  position: absolute;
+  right: 42px;
+  bottom: -5px;
+  display: grid;
+  grid-template-columns: repeat(4, 34px);
+  gap: 6px;
+  max-width: 178px;
+  max-height: 184px;
+  padding: 8px;
+  border: 1px solid rgba(80, 132, 168, 0.24);
+  border-radius: 20px 16px 16px 20px;
+  background:
+    radial-gradient(circle at 92% 8%, rgba(255, 255, 255, 0.94), transparent 34%),
+    linear-gradient(160deg, rgba(247, 252, 255, 0.95), rgba(232, 244, 249, 0.82));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.82),
+    -16px 18px 38px rgba(45, 88, 119, 0.18);
+  opacity: 0;
+  pointer-events: none;
+  overflow-y: auto;
+  scrollbar-width: none;
+  transform: translateX(12px) scale(0.96);
+  transform-origin: right bottom;
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.side-dock .skin-switcher__extras::-webkit-scrollbar {
   display: none;
+}
+
+.side-dock .skin-switcher:hover .skin-switcher__extras,
+.side-dock .skin-switcher:focus-within .skin-switcher__extras {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0) scale(1);
 }
 
 .side-dock .interaction-tool-btn,
@@ -1370,8 +1458,23 @@ button {
   color: var(--ink);
 }
 
-.side-dock .control-btn[data-icon="聊"]::before {
-  font-size: 13px;
+.side-dock .control-btn::before {
+  content: none;
+}
+
+.side-dock .control-icon,
+.side-dock .control-icon svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
+.side-dock .control-icon svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .side-dock .interaction-tools__copy,

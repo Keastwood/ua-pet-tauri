@@ -152,6 +152,8 @@ const INTERACTION_TOOL_STORAGE_KEY = "silver-pet.interaction-tool.v1";
 const PET_SKIN_STORAGE_KEY = "silver-pet.skin.v1";
 const PET_SKIN_PROMPTS_STORAGE_KEY = "silver-pet.skin-prompts.v1";
 const PET_HIDDEN_SKINS_STORAGE_KEY = "silver-pet.hidden-skins.v1";
+const PET_FAVORITE_SKINS_STORAGE_KEY = "silver-pet.favorite-skins.v1";
+const MAX_FAVORITE_SKINS = 4;
 const PET_LLM_SYSTEM_PROMPT =
   "你是一个银白发桌宠，会陪用户工作和休息。请用中文回复，语气温柔、俏皮、像桌宠在说话。每次只说一句，控制在 36 个汉字以内，不要解释，不要加引号。";
 
@@ -239,6 +241,8 @@ let customPetSkins: PetSkinDefinition[] = [];
 let availablePetSkins: PetSkinDefinition[] = [...BUILT_IN_PET_SKINS];
 let hiddenPetSkinIds = readStoredStringSet(PET_HIDDEN_SKINS_STORAGE_KEY);
 let skinPromptOverrides = readStoredStringRecord(PET_SKIN_PROMPTS_STORAGE_KEY);
+let favoritePetSkinIds = readStoredStringList(PET_FAVORITE_SKINS_STORAGE_KEY);
+const hadStoredFavoritePetSkins = localStorage.getItem(PET_FAVORITE_SKINS_STORAGE_KEY) !== null;
 
 const state: PetState = {
   affection: 0,
@@ -314,12 +318,30 @@ function readStoredStringSet(key: string): Set<string> {
   }
 }
 
+function readStoredStringList(key: string): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) ?? "[]");
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.filter((value): value is string => typeof value === "string");
+  } catch (error) {
+    console.warn(`Failed to read ${key}:`, error);
+    return [];
+  }
+}
+
 function saveSkinPromptOverrides(): void {
   localStorage.setItem(PET_SKIN_PROMPTS_STORAGE_KEY, JSON.stringify(skinPromptOverrides));
 }
 
 function saveHiddenPetSkins(): void {
   localStorage.setItem(PET_HIDDEN_SKINS_STORAGE_KEY, JSON.stringify(Array.from(hiddenPetSkinIds)));
+}
+
+function saveFavoritePetSkins(): void {
+  localStorage.setItem(PET_FAVORITE_SKINS_STORAGE_KEY, JSON.stringify(favoritePetSkinIds));
 }
 
 function getInteractionTool(id: string | null | undefined): InteractionTool {
@@ -350,6 +372,29 @@ function getSkinPrompt(skinId: string | null | undefined): string {
 
 function isRuntimeCustomSkin(skinId: string): boolean {
   return customPetSkins.some((skin) => skin.id === skinId);
+}
+
+function uniqueAvailableSkinIds(ids: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const availableIds = new Set(availablePetSkins.map((skin) => skin.id));
+
+  return ids.filter((id) => {
+    if (seen.has(id) || !availableIds.has(id)) {
+      return false;
+    }
+
+    seen.add(id);
+    return true;
+  });
+}
+
+function getFavoritePetSkinIds(): string[] {
+  const savedFavorites = uniqueAvailableSkinIds(favoritePetSkinIds).slice(0, MAX_FAVORITE_SKINS);
+  if (savedFavorites.length > 0 || hadStoredFavoritePetSkins) {
+    return savedFavorites;
+  }
+
+  return availablePetSkins.slice(0, MAX_FAVORITE_SKINS).map((skin) => skin.id);
 }
 
 function customSkinViewToDefinition(skin: CustomSkinView): PetSkinDefinition {
@@ -491,6 +536,8 @@ window.addEventListener("DOMContentLoaded", () => {
   const skinPromptSaveButton = must<HTMLButtonElement>("#skin-prompt-save-btn");
   const skinPromptClearButton = must<HTMLButtonElement>("#skin-prompt-clear-btn");
   const skinPromptStatus = must<HTMLParagraphElement>("#skin-prompt-status");
+  const skinFavoriteList = must<HTMLDivElement>("#skin-favorite-list");
+  const skinFavoriteStatus = must<HTMLParagraphElement>("#skin-favorite-status");
   const skinDeleteSelect = must<HTMLSelectElement>("#skin-delete-select");
   const skinDeleteButton = must<HTMLButtonElement>("#skin-delete-btn");
   const fxLayer = must<HTMLDivElement>("#fx-layer");
@@ -500,6 +547,30 @@ window.addEventListener("DOMContentLoaded", () => {
   const mouthOLayer = must<HTMLImageElement>("#mouth-o-layer");
   let llmRequestId = 0;
   let activeSkin = findPetSkin(state.selectedSkinId);
+  const quickActionIcons = {
+    chat:
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.2 17.2 4 21l4.7-1.4c1 .4 2.1.6 3.3.6 5 0 9-3.3 9-7.4s-4-7.4-9-7.4-9 3.3-9 7.4c0 1.7.7 3.3 1.9 4.4Z"/><path d="M8 11.2h8M8 14h5.6"/></svg>',
+    history:
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3L4.5 8.9"/><path d="M4.5 4.6v4.3h4.3M12 8.2v4.3l3 1.8"/></svg>',
+    scene:
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2.4"/><path d="m7 16 3.6-4 2.7 3 1.7-1.8 2 2.8M8.2 8.6h.1"/></svg>',
+    transparent:
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2.4"/><path d="m5.5 18 13-13M8 5v14M16 5v14M4 12h16"/></svg>',
+    pinned:
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.6 4 5.4 5.4-2.6 1.1-3.3 4.4.3 3.5-1.3 1.3-3.5-4.7-4.7-3.5 1.3-1.3 3.5.3 4.4-3.3L14.6 4Z"/><path d="m9.6 14.9-4.1 4.1"/></svg>',
+    unpinned:
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.6 4 5.4 5.4-2.6 1.1-3.3 4.4.3 3.5-1.3 1.3-3.5-4.7-4.7-3.5 1.3-1.3 3.5.3 4.4-3.3L14.6 4Z"/><path d="m4 4 16 16"/></svg>',
+  };
+
+  function setIconButton(button: HTMLButtonElement, icon: string, label: string, pressed?: boolean): void {
+    button.removeAttribute("data-icon");
+    button.innerHTML = `<span class="control-icon">${icon}</span>`;
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    if (pressed !== undefined) {
+      button.setAttribute("aria-pressed", String(pressed));
+    }
+  }
 
   function preloadSkin(skin: PetSkinDefinition): void {
     const sources = [
@@ -539,12 +610,23 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function renderSkinButtons(): void {
     skinButtons.replaceChildren();
+    const favoriteIds = getFavoritePetSkinIds();
+    const favoriteIdSet = new Set(favoriteIds);
+    const orderedSkins = [
+      ...favoriteIds.map((id) => findPetSkin(id)),
+      ...availablePetSkins.filter((skin) => !favoriteIdSet.has(skin.id)),
+    ];
+    const favoriteGroup = document.createElement("div");
+    const extraGroup = document.createElement("div");
+    favoriteGroup.className = "skin-switcher__favorites";
+    extraGroup.className = "skin-switcher__extras";
 
-    for (const skin of availablePetSkins) {
+    for (const skin of orderedSkins) {
       const button = document.createElement("button");
       button.className = "skin-switcher__btn";
       button.type = "button";
       button.dataset.skin = skin.id;
+      button.dataset.skinPriority = favoriteIdSet.has(skin.id) ? "favorite" : "extra";
       button.title = skin.name;
       button.setAttribute("aria-label", `切换皮肤：${skin.name}`);
       button.setAttribute("aria-pressed", String(skin.id === state.selectedSkinId));
@@ -558,11 +640,68 @@ window.addEventListener("DOMContentLoaded", () => {
       button.addEventListener("click", () => {
         setPetSkin(skin.id, { announce: true });
       });
-      skinButtons.appendChild(button);
+      if (favoriteIdSet.has(skin.id)) {
+        favoriteGroup.appendChild(button);
+      } else {
+        extraGroup.appendChild(button);
+      }
     }
 
+    skinButtons.append(favoriteGroup, extraGroup);
     renderSkinPromptOptions();
+    renderFavoriteSkinEditor();
     renderSkinDeleteOptions();
+  }
+
+  function renderFavoriteSkinEditor(): void {
+    skinFavoriteList.replaceChildren();
+    const favoriteIds = getFavoritePetSkinIds();
+    const favoriteIdSet = new Set(favoriteIds);
+
+    for (const skin of availablePetSkins) {
+      const label = document.createElement("label");
+      label.className = "skin-favorite-item";
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = favoriteIdSet.has(skin.id);
+      checkbox.disabled = !checkbox.checked && favoriteIds.length >= MAX_FAVORITE_SKINS;
+      checkbox.addEventListener("change", () => {
+        const currentIds = getFavoritePetSkinIds();
+        if (checkbox.checked) {
+          if (currentIds.length >= MAX_FAVORITE_SKINS) {
+            checkbox.checked = false;
+            skinFavoriteStatus.textContent = `最多只能常驻 ${MAX_FAVORITE_SKINS} 个皮肤。`;
+            return;
+          }
+          favoritePetSkinIds = [...currentIds, skin.id];
+        } else {
+          if (currentIds.length <= 1) {
+            checkbox.checked = true;
+            skinFavoriteStatus.textContent = "至少保留 1 个常用皮肤，侧边栏才不会空掉。";
+            return;
+          }
+          favoritePetSkinIds = currentIds.filter((id) => id !== skin.id);
+        }
+
+        favoritePetSkinIds = uniqueAvailableSkinIds(favoritePetSkinIds).slice(0, MAX_FAVORITE_SKINS);
+        saveFavoritePetSkins();
+        renderSkinButtons();
+      });
+
+      const thumbnail = document.createElement("img");
+      thumbnail.src = skin.images.idle;
+      thumbnail.alt = "";
+      thumbnail.loading = "lazy";
+
+      const name = document.createElement("span");
+      name.textContent = skin.name;
+
+      label.append(checkbox, thumbnail, name);
+      skinFavoriteList.appendChild(label);
+    }
+
+    skinFavoriteStatus.textContent = `已选择 ${favoriteIds.length}/${MAX_FAVORITE_SKINS} 个常用皮肤；其余皮肤会在悬停皮肤栏时向左展开。`;
   }
 
   function renderSkinPromptOptions(): void {
@@ -628,16 +767,18 @@ window.addEventListener("DOMContentLoaded", () => {
       moodValue.textContent = "待机";
     }
 
-    pinButton.textContent = "置顶";
-    pinButton.dataset.icon = state.alwaysOnTop ? "顶" : "低";
-    pinButton.title = state.alwaysOnTop ? "取消置顶" : "重新置顶";
-    pinButton.setAttribute("aria-label", pinButton.title);
-    pinButton.setAttribute("aria-pressed", String(state.alwaysOnTop));
-    sceneButton.textContent = state.sceneMode ? "透明" : "背景";
-    sceneButton.dataset.icon = state.sceneMode ? "透" : "景";
-    sceneButton.title = state.sceneMode ? "切回透明模式" : "开启背景模式";
-    sceneButton.setAttribute("aria-label", sceneButton.title);
-    sceneButton.setAttribute("aria-pressed", String(state.sceneMode));
+    setIconButton(
+      pinButton,
+      state.alwaysOnTop ? quickActionIcons.pinned : quickActionIcons.unpinned,
+      state.alwaysOnTop ? "取消置顶" : "重新置顶",
+      state.alwaysOnTop,
+    );
+    setIconButton(
+      sceneButton,
+      state.sceneMode ? quickActionIcons.transparent : quickActionIcons.scene,
+      state.sceneMode ? "切回透明模式" : "开启背景模式",
+      state.sceneMode,
+    );
     llmModeButton.textContent = state.llmInteractionMode ? "LLM 互动" : "本地互动";
     llmModeButton.setAttribute("aria-pressed", String(state.llmInteractionMode));
 
@@ -665,6 +806,9 @@ window.addEventListener("DOMContentLoaded", () => {
     }
 
     updateStatus();
+    if (bubble.dataset.show === "true") {
+      window.requestAnimationFrame(positionBubble);
+    }
     if (!settingsPanel.hidden && (skinPromptSelect.value === previousSkinId || skinPromptSelect.value === skin.id)) {
       loadSkinPromptEditor(skin.id);
     }
@@ -932,7 +1076,12 @@ window.addEventListener("DOMContentLoaded", () => {
       const { [skinId]: _removedPrompt, ...restPrompts } = skinPromptOverrides;
       skinPromptOverrides = restPrompts;
       saveSkinPromptOverrides();
+      favoritePetSkinIds = favoritePetSkinIds.filter((id) => id !== skinId);
       syncAvailablePetSkins();
+      if (uniqueAvailableSkinIds(favoritePetSkinIds).length === 0 && availablePetSkins.length > 0) {
+        favoritePetSkinIds = [availablePetSkins[0].id];
+      }
+      saveFavoritePetSkins();
       renderSkinButtons();
 
       if (state.selectedSkinId === skinId) {
@@ -1000,11 +1149,28 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function positionBubble(): void {
+    const appHeight = petApp.offsetHeight;
+    const appWidth = petApp.offsetWidth;
+    const petTop = petStage.offsetTop + petFrame.offsetTop + petRoot.offsetTop;
+    const petLeft = petStage.offsetLeft + petFrame.offsetLeft + petRoot.offsetLeft;
+    const bubbleWidth = bubble.offsetWidth || 310;
+    const bubbleHeight = bubble.offsetHeight || 58;
+    const anchorRatio = activeSkin.layout === "fullBody" ? 0.1 : 0.11;
+    const anchorY = petTop + petRoot.offsetHeight * anchorRatio;
+    const top = Math.min(Math.max(12, anchorY - bubbleHeight - 10), Math.max(12, appHeight - bubbleHeight - 18));
+    const left = Math.min(Math.max(bubbleWidth / 2 + 10, petLeft + petRoot.offsetWidth / 2), appWidth - bubbleWidth / 2 - 10);
+
+    bubble.style.setProperty("--bubble-top", `${Math.round(top)}px`);
+    bubble.style.setProperty("--bubble-left", `${Math.round(left)}px`);
+  }
+
   function setBubble(text: string, tone: Tone = "warm", duration = 2200): void {
     clearTimer(state.bubbleTimeout);
     bubble.dataset.show = "true";
     bubble.dataset.tone = tone;
     bubble.textContent = text;
+    window.requestAnimationFrame(positionBubble);
     state.bubbleTimeout = window.setTimeout(() => {
       bubble.dataset.show = "false";
     }, duration);
@@ -1432,6 +1598,7 @@ window.addEventListener("DOMContentLoaded", () => {
     bubble.dataset.show = "true";
     bubble.dataset.tone = "warm";
     bubble.textContent = "·";
+    window.requestAnimationFrame(positionBubble);
 
     state.bubbleTimeout = window.setInterval(() => {
       if (requestId !== llmRequestId) {
@@ -1441,6 +1608,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
       dotCount = dotCount >= 6 ? 1 : dotCount + 1;
       bubble.textContent = "·".repeat(dotCount);
+      positionBubble();
     }, 180);
   }
 
@@ -1465,6 +1633,7 @@ window.addEventListener("DOMContentLoaded", () => {
     bubble.dataset.show = "true";
     bubble.dataset.tone = "warm";
     bubble.textContent = text || "·";
+    window.requestAnimationFrame(positionBubble);
     updateStatus();
   }
 
@@ -1472,6 +1641,7 @@ window.addEventListener("DOMContentLoaded", () => {
     bubble.dataset.show = "true";
     bubble.dataset.tone = "warm";
     bubble.textContent = text || "·";
+    window.requestAnimationFrame(positionBubble);
   }
 
   function finishStreamingTalking(duration = 2400): void {
@@ -2054,6 +2224,8 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  setIconButton(chatButton, quickActionIcons.chat, "聊天");
+  setIconButton(historyButton, quickActionIcons.history, "历史");
   syncAvailablePetSkins();
   renderSkinButtons();
   setSettingsTab("llm");
