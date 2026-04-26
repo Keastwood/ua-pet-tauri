@@ -9,11 +9,13 @@ import mouthOOverlay from "./assets/pet/mouth_o_overlay.png";
 
 type Tone = "warm" | "alert" | "hint";
 type BaseExpression = "idle" | "surprised";
+type InteractionToolId = "finger" | "palm" | "mouth" | "foot" | "feather" | "comb" | "snack";
 
 interface PetState {
   affection: number;
   alwaysOnTop: boolean;
   llmInteractionMode: boolean;
+  selectedInteractionTool: InteractionToolId;
   talking: boolean;
   surprised: boolean;
   scale: number;
@@ -55,12 +57,15 @@ interface LlmConfigView {
   baseUrl: string;
   model: string;
   timeoutSecs: number;
+  petInteractionSystemPrompt: string;
+  defaultPetInteractionSystemPrompt: string;
 }
 
 interface InteractionRecord {
   id: number;
   timestampMs: number;
   source: string;
+  interactionTool?: string | null;
   area?: string | null;
   xPercent?: number | null;
   yPercent?: number | null;
@@ -88,6 +93,12 @@ interface PetHitAreaRule {
   height: number;
 }
 
+interface InteractionTool {
+  id: InteractionToolId;
+  label: string;
+  verb: string;
+}
+
 const BASE_WINDOW_WIDTH = 430;
 const BASE_WINDOW_HEIGHT = 860;
 const MIN_SCALE = 0.75;
@@ -96,8 +107,19 @@ const SCALE_STEP = 0.05;
 const SCALE_STORAGE_KEY = "silver-pet.scale.v2";
 const SCENE_MODE_STORAGE_KEY = "silver-pet.scene-mode.v1";
 const LLM_INTERACTION_MODE_STORAGE_KEY = "silver-pet.llm-interaction-mode.v1";
+const INTERACTION_TOOL_STORAGE_KEY = "silver-pet.interaction-tool.v1";
 const PET_LLM_SYSTEM_PROMPT =
   "你是一个银白发桌宠，会陪用户工作和休息。请用中文回复，语气温柔、俏皮、像桌宠在说话。每次只说一句，控制在 36 个汉字以内，不要解释，不要加引号。";
+
+const INTERACTION_TOOLS: InteractionTool[] = [
+  { id: "finger", label: "手指", verb: "轻点" },
+  { id: "palm", label: "手掌", verb: "轻拍" },
+  { id: "mouth", label: "嘴", verb: "亲近" },
+  { id: "foot", label: "脚", verb: "轻踢" },
+  { id: "feather", label: "羽毛", verb: "轻挠" },
+  { id: "comb", label: "梳子", verb: "梳理" },
+  { id: "snack", label: "零食", verb: "投喂" },
+];
 
 const PET_HIT_AREA_RULES: PetHitAreaRule[] = [
   { label: "嘴巴", shape: "ellipse", x: 43.5, y: 47.2, width: 14, height: 5.4 },
@@ -133,6 +155,7 @@ const state: PetState = {
   affection: 0,
   alwaysOnTop: true,
   llmInteractionMode: false,
+  selectedInteractionTool: "finger",
   talking: false,
   surprised: false,
   scale: 1,
@@ -169,6 +192,10 @@ const chatLines = [
 
 function pick<T>(items: readonly T[]): T {
   return items[Math.floor(Math.random() * items.length)];
+}
+
+function getInteractionTool(id: string | null | undefined): InteractionTool {
+  return INTERACTION_TOOLS.find((tool) => tool.id === id) ?? INTERACTION_TOOLS[0];
 }
 
 function must<T extends HTMLElement>(selector: string): T {
@@ -256,6 +283,7 @@ window.addEventListener("DOMContentLoaded", () => {
   const llmBaseUrlInput = must<HTMLInputElement>("#llm-base-url-input");
   const llmModelInput = must<HTMLInputElement>("#llm-model-input");
   const llmTimeoutInput = must<HTMLInputElement>("#llm-timeout-input");
+  const llmSystemPromptInput = must<HTMLTextAreaElement>("#llm-system-prompt-input");
   const llmClearKeyInput = must<HTMLInputElement>("#llm-clear-key-input");
   const affectionValue = must<HTMLSpanElement>("#affection-value");
   const moodValue = must<HTMLSpanElement>("#mood-value");
@@ -270,6 +298,10 @@ window.addEventListener("DOMContentLoaded", () => {
   const historyButton = must<HTMLButtonElement>("#history-btn");
   const closeButton = must<HTMLButtonElement>("#close-btn");
   const dragHandle = must<HTMLButtonElement>("#drag-handle");
+  const interactionToolValue = must<HTMLElement>("#interaction-tool-value");
+  const interactionToolButtons = Array.from(
+    document.querySelectorAll<HTMLButtonElement>(".interaction-tool-btn[data-tool]"),
+  );
   const fxLayer = must<HTMLDivElement>("#fx-layer");
   const baseLayer = must<HTMLImageElement>("#base-layer");
   const blinkLayer = must<HTMLImageElement>("#blink-layer");
@@ -315,6 +347,12 @@ window.addEventListener("DOMContentLoaded", () => {
     sceneButton.setAttribute("aria-pressed", String(state.sceneMode));
     llmModeButton.textContent = state.llmInteractionMode ? "LLM" : "本地";
     llmModeButton.setAttribute("aria-pressed", String(state.llmInteractionMode));
+
+    const selectedTool = getInteractionTool(state.selectedInteractionTool);
+    interactionToolValue.textContent = selectedTool.label;
+    for (const button of interactionToolButtons) {
+      button.setAttribute("aria-pressed", String(button.dataset.tool === selectedTool.id));
+    }
   }
 
   function setSceneMode(enabled: boolean, options: { persist?: boolean; announce?: boolean } = {}): void {
@@ -347,6 +385,21 @@ window.addEventListener("DOMContentLoaded", () => {
         "hint",
         2100,
       );
+    }
+  }
+
+  function setInteractionTool(toolId: string | null | undefined, options: { persist?: boolean; announce?: boolean } = {}): void {
+    const tool = getInteractionTool(toolId);
+    state.selectedInteractionTool = tool.id;
+
+    if (options.persist ?? true) {
+      localStorage.setItem(INTERACTION_TOOL_STORAGE_KEY, tool.id);
+    }
+
+    updateStatus();
+
+    if (options.announce) {
+      setBubble(`已切换为${tool.label}，接下来会用它${tool.verb}桌宠。`, "hint", 1700);
     }
   }
 
@@ -435,6 +488,8 @@ window.addEventListener("DOMContentLoaded", () => {
     llmBaseUrlInput.value = config.baseUrl || "https://api.openai.com/v1";
     llmModelInput.value = config.model;
     llmTimeoutInput.value = String(config.timeoutSecs || 45);
+    llmSystemPromptInput.value = config.petInteractionSystemPrompt ?? "";
+    llmSystemPromptInput.placeholder = config.defaultPetInteractionSystemPrompt || "留空使用默认桌宠交互提示词";
     llmClearKeyInput.checked = false;
   }
 
@@ -487,6 +542,7 @@ window.addEventListener("DOMContentLoaded", () => {
           baseUrl: llmBaseUrlInput.value.trim(),
           model: llmModelInput.value.trim(),
           timeoutSecs: clampTimeoutSeconds(Number(llmTimeoutInput.value)),
+          petInteractionSystemPrompt: llmSystemPromptInput.value.trim() || null,
         },
       });
 
@@ -652,7 +708,12 @@ window.addEventListener("DOMContentLoaded", () => {
 
       const meta = document.createElement("div");
       meta.className = "history-meta";
-      const details = [getSourceLabel(record.source), getAreaLabel(record.area)];
+      const areaLabel = getAreaLabel(record.area);
+      const interactionTool = record.interactionTool?.trim();
+      const details = [
+        getSourceLabel(record.source),
+        interactionTool ? `${interactionTool} -> ${areaLabel}` : areaLabel,
+      ];
       const xPercent = record.xPercent;
       const yPercent = record.yPercent;
       if (
@@ -752,12 +813,16 @@ window.addEventListener("DOMContentLoaded", () => {
   ): Promise<void> {
     const requestId = ++llmRequestId;
     const { xPercent, yPercent } = getPetPointerPosition(event);
-    startTalking("我记下来了，正在结合历史想一想。", 1400);
+    const selectedTool = getInteractionTool(state.selectedInteractionTool);
+    const interactionTool = source === "click" ? selectedTool.label : null;
+    const actionText = interactionTool && area ? `${interactionTool} -> ${area}` : "这次互动";
+    startTalking(`我记下来了：${actionText}，正在结合历史想一想。`, 1400);
 
     try {
       const response = await invoke<PetInteractionResponse>("llm_pet_interact", {
         request: {
           source,
+          interactionTool,
           area: area ?? null,
           xPercent: xPercent ?? null,
           yPercent: yPercent ?? null,
@@ -1122,6 +1187,12 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  for (const button of interactionToolButtons) {
+    button.addEventListener("click", () => {
+      setInteractionTool(button.dataset.tool, { announce: true });
+    });
+  }
+
   floatingInput.addEventListener("submit", (event) => {
     event.preventDefault();
     void submitFloatingInput();
@@ -1138,7 +1209,7 @@ window.addEventListener("DOMContentLoaded", () => {
     "wheel",
     (event) => {
       const target = event.target as HTMLElement;
-      if (target.closest(".control-row")) {
+      if (target.closest(".control-row") || target.closest(".interaction-tools")) {
         return;
       }
       event.preventDefault();
@@ -1233,9 +1304,11 @@ window.addEventListener("DOMContentLoaded", () => {
   const savedScale = Number(localStorage.getItem(SCALE_STORAGE_KEY) ?? "1");
   const savedLlmInteractionMode = localStorage.getItem(LLM_INTERACTION_MODE_STORAGE_KEY) === "1";
   const savedSceneMode = localStorage.getItem(SCENE_MODE_STORAGE_KEY) === "1";
+  const savedInteractionTool = localStorage.getItem(INTERACTION_TOOL_STORAGE_KEY);
 
   setSceneMode(savedSceneMode, { persist: false });
   setLlmInteractionMode(savedLlmInteractionMode, { persist: false });
+  setInteractionTool(savedInteractionTool, { persist: false });
   void applyScale(savedScale, { persist: false, showBubble: false, ensureDocked: true });
 
   void listen("pet-open-input", () => {

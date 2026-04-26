@@ -18,7 +18,7 @@ const LLM_CONFIG_FILE: &str = "llm_config.json";
 const INTERACTION_HISTORY_FILE: &str = "interaction_history.json";
 const MAX_HISTORY_RECORDS: usize = 240;
 const PET_INPUT_SHORTCUT_LABEL: &str = "Ctrl+Alt+Space";
-const PET_INTERACTION_SYSTEM_PROMPT: &str = "你是银白发桌宠，正在和用户互动。请参考最近交互历史，用中文给出一句自然、温柔、俏皮的桌宠回应。回复不超过 42 个汉字，不要解释，不要加引号。";
+const DEFAULT_PET_INTERACTION_SYSTEM_PROMPT: &str = "你是银白发桌宠，正在和用户互动。用户会先选择一个交互控件，例如手指、手掌、嘴、脚、羽毛、梳子或零食，再点击桌宠的具体部位。请参考控件、部位、坐标和最近交互历史，用中文给出一句自然、温柔、俏皮的桌宠回应。回复不超过 42 个汉字，不要解释，不要加引号。";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct LlmMessage {
@@ -51,6 +51,7 @@ struct StoredLlmConfig {
     base_url: Option<String>,
     model: Option<String>,
     timeout_secs: Option<u64>,
+    pet_interaction_system_prompt: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,6 +62,8 @@ struct SaveLlmConfigRequest {
     base_url: String,
     model: String,
     timeout_secs: u64,
+    #[serde(default)]
+    pet_interaction_system_prompt: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -71,6 +74,8 @@ struct LlmConfigView {
     base_url: String,
     model: String,
     timeout_secs: u64,
+    pet_interaction_system_prompt: String,
+    default_pet_interaction_system_prompt: String,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +84,7 @@ struct EffectiveLlmConfig {
     base_url: String,
     model: String,
     timeout_secs: u64,
+    pet_interaction_system_prompt: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -90,6 +96,8 @@ struct InteractionRecord {
     timestamp_ms: u64,
     #[serde(default)]
     source: String,
+    #[serde(default, alias = "interaction_tool")]
+    interaction_tool: Option<String>,
     #[serde(default)]
     area: Option<String>,
     #[serde(default, alias = "x_percent")]
@@ -108,6 +116,8 @@ struct InteractionRecord {
 #[serde(rename_all = "camelCase")]
 struct PetInteractionRequest {
     source: String,
+    #[serde(default, alias = "interaction_tool")]
+    interaction_tool: Option<String>,
     #[serde(default)]
     area: Option<String>,
     #[serde(default, alias = "x_percent")]
@@ -264,6 +274,7 @@ fn normalize_interaction_history(history: Vec<InteractionRecord>) -> Vec<Interac
                 record.timestamp_ms = now_ms();
             }
 
+            record.interaction_tool = clean_optional(record.interaction_tool);
             record.area = clean_optional(record.area);
             record.user_text = clean_optional(record.user_text);
             record.assistant_text = record.assistant_text.trim().to_string();
@@ -371,6 +382,9 @@ fn config_view(config: &StoredLlmConfig) -> LlmConfigView {
         base_url,
         model,
         timeout_secs,
+        pet_interaction_system_prompt: clean_optional(config.pet_interaction_system_prompt.clone())
+            .unwrap_or_default(),
+        default_pet_interaction_system_prompt: DEFAULT_PET_INTERACTION_SYSTEM_PROMPT.to_string(),
     }
 }
 
@@ -393,12 +407,16 @@ fn effective_llm_config(
         parse_env_u64("LLM_TIMEOUT_SECS", DEFAULT_LLM_TIMEOUT_SECS)
             .unwrap_or(DEFAULT_LLM_TIMEOUT_SECS)
     });
+    let pet_interaction_system_prompt =
+        clean_optional(stored.pet_interaction_system_prompt)
+            .unwrap_or_else(|| DEFAULT_PET_INTERACTION_SYSTEM_PROMPT.to_string());
 
     Ok(EffectiveLlmConfig {
         api_key,
         base_url,
         model,
         timeout_secs,
+        pet_interaction_system_prompt,
     })
 }
 
@@ -498,14 +516,15 @@ fn format_history_for_prompt(history: &[InteractionRecord]) -> String {
         .rev()
         .map(|record| {
             let area = record.area.as_deref().unwrap_or("无部位");
+            let interaction_tool = record.interaction_tool.as_deref().unwrap_or("无控件");
             let user = record.user_text.as_deref().unwrap_or("");
             let position = match (record.x_percent, record.y_percent) {
                 (Some(x), Some(y)) => format!("位置 {:.1}%, {:.1}%", x, y),
                 _ => "无坐标".to_string(),
             };
             format!(
-                "- {} / {} / {} / 用户文本：{} / 回复：{}",
-                record.source, area, position, user, record.assistant_text
+                "- 来源={} / 控件={} / 部位={} / {} / 用户文本：{} / 回复：{}",
+                record.source, interaction_tool, area, position, user, record.assistant_text
             )
         })
         .collect::<Vec<_>>()
@@ -514,6 +533,7 @@ fn format_history_for_prompt(history: &[InteractionRecord]) -> String {
 
 fn describe_pet_interaction(request: &PetInteractionRequest) -> String {
     let area = request.area.as_deref().unwrap_or("未指定");
+    let interaction_tool = request.interaction_tool.as_deref().unwrap_or("未选择");
     let user_text = request.user_text.as_deref().unwrap_or("");
     let position = match (request.x_percent, request.y_percent) {
         (Some(x), Some(y)) => format!("{:.1}%, {:.1}%", x, y),
@@ -521,8 +541,9 @@ fn describe_pet_interaction(request: &PetInteractionRequest) -> String {
     };
 
     format!(
-        "当前交互：来源={}；部位={}；位置={}；用户文本={}；亲密度={}；状态={}；背景模式={}。请生成桌宠回应。",
+        "当前交互：来源={}；用户使用控件={}；目标部位={}；位置={}；用户文本={}；亲密度={}；状态={}；背景模式={}。请生成桌宠回应。",
         request.source,
+        interaction_tool,
         area,
         position,
         user_text,
@@ -579,6 +600,7 @@ fn save_llm_config(app: AppHandle, request: SaveLlmConfigRequest) -> Result<LlmC
     config.base_url = Some(base_url);
     config.model = Some(model);
     config.timeout_secs = Some(request.timeout_secs);
+    config.pet_interaction_system_prompt = clean_optional(request.pet_interaction_system_prompt);
 
     if request.clear_api_key {
         config.api_key = None;
@@ -633,7 +655,7 @@ async fn llm_pet_interact(
             let messages = vec![
                 LlmMessage {
                     role: "system".to_string(),
-                    content: PET_INTERACTION_SYSTEM_PROMPT.to_string(),
+                    content: config.pet_interaction_system_prompt.clone(),
                 },
                 LlmMessage {
                     role: "user".to_string(),
@@ -695,6 +717,7 @@ async fn llm_pet_interact(
         id: 0,
         timestamp_ms: now_ms(),
         source: request.source,
+        interaction_tool: clean_optional(request.interaction_tool),
         area: clean_optional(request.area),
         x_percent: request.x_percent,
         y_percent: request.y_percent,

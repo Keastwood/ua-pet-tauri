@@ -60,6 +60,16 @@
                 <input id="llm-timeout-input" type="number" min="5" max="300" step="1" />
               </label>
 
+              <label class="settings-field settings-field--wide">
+                <span>桌宠交互系统提示词</span>
+                <textarea
+                  id="llm-system-prompt-input"
+                  rows="5"
+                  spellcheck="false"
+                  placeholder="留空使用默认提示词"
+                ></textarea>
+              </label>
+
               <label class="settings-check">
                 <input id="llm-clear-key-input" type="checkbox" />
                 <span>清除已保存的 API Key</span>
@@ -100,6 +110,22 @@
               <button class="hitbox hitbox--body" data-area="body" type="button" aria-label="身体互动"></button>
             </div>
           </div>
+
+          <section class="interaction-tools" aria-label="交互控件">
+            <div class="interaction-tools__copy">
+              <span>交互控件</span>
+              <strong id="interaction-tool-value">手指</strong>
+            </div>
+            <div class="interaction-tools__buttons">
+              <button class="interaction-tool-btn" type="button" data-tool="finger" aria-pressed="true">手指</button>
+              <button class="interaction-tool-btn" type="button" data-tool="palm" aria-pressed="false">手掌</button>
+              <button class="interaction-tool-btn" type="button" data-tool="mouth" aria-pressed="false">嘴</button>
+              <button class="interaction-tool-btn" type="button" data-tool="foot" aria-pressed="false">脚</button>
+              <button class="interaction-tool-btn" type="button" data-tool="feather" aria-pressed="false">羽毛</button>
+              <button class="interaction-tool-btn" type="button" data-tool="comb" aria-pressed="false">梳子</button>
+              <button class="interaction-tool-btn" type="button" data-tool="snack" aria-pressed="false">零食</button>
+            </div>
+          </section>
 
           <div class="status-row">
             <div class="status-pill">亲密度 <strong id="affection-value">00</strong></div>
