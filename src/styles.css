@@ -684,19 +684,19 @@ button {
 }
 
 .hitbox--head {
-  top: 8%;
+  top: -15%;
   left: 8%;
   width: 84%;
-  height: 48%;
+  height: 71%;
   border-radius: 50% 50% 44% 44%;
   z-index: 7;
 }
 
 .hitbox--body {
-  top: 51%;
+  top: 50%;
   left: 0;
   width: 100%;
-  height: 49%;
+  height: 50%;
   border-radius: 28% 28% 22% 22%;
   z-index: 6;
 }

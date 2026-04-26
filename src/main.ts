@@ -615,7 +615,8 @@ window.addEventListener("DOMContentLoaded", () => {
       return {};
     }
 
-    const rect = petRoot.getBoundingClientRect();
+    const imageRect = baseLayer.getBoundingClientRect();
+    const rect = imageRect.width > 0 && imageRect.height > 0 ? imageRect : petRoot.getBoundingClientRect();
     const xPercent = Math.min(100, Math.max(0, ((event.clientX - rect.left) / rect.width) * 100));
     const yPercent = Math.min(100, Math.max(0, ((event.clientY - rect.top) / rect.height) * 100));
     return {
