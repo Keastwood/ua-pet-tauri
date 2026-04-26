@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Silver Pet</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <main class="window-shell">
+      <section class="pet-app">
+        <div id="bubble" class="speech-bubble" data-tone="warm" data-show="false"></div>
+
+        <aside id="history-panel" class="history-panel" aria-label="交互历史" hidden>
+          <div class="history-card">
+            <div class="settings-header">
+              <div>
+                <p class="settings-eyebrow">Memory Log</p>
+                <h2>交互历史</h2>
+              </div>
+              <button id="history-close-btn" class="settings-icon-btn" type="button" aria-label="关闭历史">x</button>
+            </div>
+            <div id="history-list" class="history-list"></div>
+            <div class="settings-actions">
+              <button id="history-clear-btn" class="settings-btn" type="button">清空历史</button>
+              <button id="history-refresh-btn" class="settings-btn settings-btn--primary" type="button">刷新</button>
+            </div>
+          </div>
+        </aside>
+
+        <aside id="settings-panel" class="settings-panel" aria-label="LLM 设置" hidden>
+          <div class="settings-card">
+            <div class="settings-header">
+              <div>
+                <p class="settings-eyebrow">右键菜单</p>
+                <h2>LLM 设置</h2>
+              </div>
+              <button id="settings-close-btn" class="settings-icon-btn" type="button" aria-label="关闭设置">x</button>
+            </div>
+
+            <form id="llm-settings-form" class="settings-form">
+              <label class="settings-field">
+                <span>API Key</span>
+                <input id="llm-api-key-input" type="password" autocomplete="off" spellcheck="false" />
+              </label>
+
+              <label class="settings-field">
+                <span>Base URL</span>
+                <input id="llm-base-url-input" type="url" autocomplete="off" spellcheck="false" />
+              </label>
+
+              <label class="settings-field">
+                <span>模型</span>
+                <input id="llm-model-input" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+
+              <label class="settings-field">
+                <span>超时秒数</span>
+                <input id="llm-timeout-input" type="number" min="5" max="300" step="1" />
+              </label>
+
+              <label class="settings-check">
+                <input id="llm-clear-key-input" type="checkbox" />
+                <span>清除已保存的 API Key</span>
+              </label>
+
+              <p id="settings-status" class="settings-status" data-tone="idle">右键桌宠可随时回到这里调整配置。</p>
+
+              <div class="settings-actions">
+                <button id="settings-save-btn" class="settings-btn settings-btn--primary" type="submit">保存</button>
+                <button id="settings-test-btn" class="settings-btn" type="button">测试连接</button>
+              </div>
+            </form>
+          </div>
+        </aside>
+
+        <form id="floating-input" class="floating-input" hidden>
+          <label class="floating-input-label" for="floating-text-input">和桌宠说点什么</label>
+          <div class="floating-input-row">
+            <input id="floating-text-input" type="text" autocomplete="off" spellcheck="false" />
+            <button id="floating-send-btn" class="settings-btn settings-btn--primary" type="submit">发送</button>
+          </div>
+          <p id="floating-input-hint" class="floating-input-hint">快捷键：Ctrl + Alt + Space</p>
+        </form>
+
+        <section id="pet-stage" class="pet-stage">
+          <div id="pet-frame" class="pet-frame">
+            <button id="drag-handle" class="drag-chip" type="button">拖动</button>
+            <div class="pet-shadow"></div>
+
+            <div id="pet" class="pet" aria-label="interactive desktop pet">
+              <div id="fx-layer" class="fx-layer"></div>
+              <img id="base-layer" class="pet-image" alt="base pet" />
+              <img id="blink-layer" class="pet-overlay" alt="blink overlay" hidden />
+              <img id="talk-layer" class="pet-overlay" alt="talk overlay" hidden />
+              <img id="mouth-o-layer" class="pet-overlay" alt="mouth o overlay" hidden />
+
+              <button class="hitbox hitbox--head" data-area="head" type="button" aria-label="摸头互动"></button>
+              <button class="hitbox hitbox--body" data-area="body" type="button" aria-label="身体互动"></button>
+            </div>
+          </div>
+
+          <div class="status-row">
+            <div class="status-pill">亲密度 <strong id="affection-value">00</strong></div>
+            <div class="status-pill">状态 <strong id="mood-value">待机</strong></div>
+            <div class="status-pill">缩放 <strong id="scale-value">100%</strong></div>
+          </div>
+
+          <div class="control-row">
+            <button id="chat-btn" class="control-btn control-btn--primary" type="button">聊天</button>
+            <button id="snap-btn" class="control-btn" type="button">归位</button>
+            <button id="scale-down-btn" class="control-btn" type="button">-</button>
+            <button id="scale-up-btn" class="control-btn" type="button">+</button>
+            <button id="llm-mode-btn" class="control-btn" type="button" aria-pressed="false">本地</button>
+            <button id="history-btn" class="control-btn" type="button">历史</button>
+            <button id="scene-btn" class="control-btn" type="button" aria-pressed="false">背景</button>
+            <button id="pin-btn" class="control-btn" type="button" aria-pressed="true">取消置顶</button>
+            <button id="close-btn" class="control-btn" type="button">退出</button>
+          </div>
+
+          <p class="note">拖动把手或角色外侧可以移动桌宠，滚轮和 +/- 可以缩放。右键打开 LLM 设置。</p>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>
