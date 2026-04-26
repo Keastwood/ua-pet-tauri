@@ -80,6 +80,7 @@
               <div class="settings-actions">
                 <button id="settings-save-btn" class="settings-btn settings-btn--primary" type="submit">保存</button>
                 <button id="settings-test-btn" class="settings-btn" type="button">测试连接</button>
+                <button id="close-btn" class="settings-btn settings-btn--danger" type="button">退出桌宠</button>
               </div>
             </form>
           </div>
@@ -111,49 +112,70 @@
             </div>
           </div>
 
-          <section class="interaction-tools" aria-label="交互控件">
-            <div class="interaction-tools__copy">
-              <span>交互控件</span>
-              <strong id="interaction-tool-value">手指</strong>
+          <aside class="side-dock" aria-label="桌宠快捷控件">
+            <section class="interaction-tools" aria-label="交互控件">
+              <div class="interaction-tools__copy">
+                <span>控件</span>
+                <strong id="interaction-tool-value">手指</strong>
+              </div>
+              <div class="interaction-tools__buttons">
+                <button class="interaction-tool-btn" type="button" data-tool="finger" data-icon="☝" aria-label="手指" title="手指" aria-pressed="true">手指</button>
+                <button class="interaction-tool-btn" type="button" data-tool="palm" data-icon="✋" aria-label="手掌" title="手掌" aria-pressed="false">手掌</button>
+                <button class="interaction-tool-btn" type="button" data-tool="mouth" data-icon="♡" aria-label="嘴" title="嘴" aria-pressed="false">嘴</button>
+                <button class="interaction-tool-btn" type="button" data-tool="foot" data-icon="◒" aria-label="脚" title="脚" aria-pressed="false">脚</button>
+                <button class="interaction-tool-btn" type="button" data-tool="feather" data-icon="〰" aria-label="羽毛" title="羽毛" aria-pressed="false">羽毛</button>
+                <button class="interaction-tool-btn" type="button" data-tool="comb" data-icon="▥" aria-label="梳子" title="梳子" aria-pressed="false">梳子</button>
+                <button class="interaction-tool-btn" type="button" data-tool="snack" data-icon="◇" aria-label="零食" title="零食" aria-pressed="false">零食</button>
+              </div>
+            </section>
+
+            <details class="skin-switcher" aria-label="助手皮肤">
+              <summary class="dock-summary">
+                <span>皮肤</span>
+                <strong id="skin-value">银白半身 UA</strong>
+              </summary>
+              <div id="skin-buttons" class="skin-switcher__buttons"></div>
+              <div class="skin-importer">
+                <input id="skin-file-input" type="file" accept="image/*" hidden />
+                <input id="skin-name-input" class="skin-importer__name" type="text" placeholder="新皮肤名，可留空" />
+                <select id="skin-layout-select" class="skin-importer__select" aria-label="皮肤部位绑定">
+                  <option value="halfBody">半身绑定</option>
+                  <option value="fullBody">全身立绘</option>
+                </select>
+                <label class="skin-importer__check">
+                  <input id="skin-transparent-input" type="checkbox" checked />
+                  <span>边缘透明</span>
+                </label>
+                <button id="skin-add-btn" class="skin-switcher__btn skin-switcher__btn--add" type="button">
+                  添加图片
+                </button>
+                <p id="skin-import-status" class="skin-importer__status">支持 PNG/JPEG/WebP。</p>
+              </div>
+            </details>
+
+            <details class="quick-panel" aria-label="更多操作">
+              <summary class="dock-summary">
+                <span>工具</span>
+                <strong>更多</strong>
+              </summary>
+              <div class="control-row">
+                <button id="chat-btn" class="control-btn control-btn--primary" type="button">聊天</button>
+                <button id="snap-btn" class="control-btn" type="button">归位</button>
+                <button id="scale-down-btn" class="control-btn" type="button">-</button>
+                <button id="scale-up-btn" class="control-btn" type="button">+</button>
+                <button id="llm-mode-btn" class="control-btn" type="button" aria-pressed="false">本地</button>
+                <button id="history-btn" class="control-btn" type="button">历史</button>
+                <button id="scene-btn" class="control-btn" type="button" aria-pressed="false">背景</button>
+                <button id="pin-btn" class="control-btn" type="button" aria-pressed="true">取消置顶</button>
+              </div>
+            </details>
+
+            <div class="status-row">
+              <div class="status-pill">亲密 <strong id="affection-value">00</strong></div>
+              <div class="status-pill">状态 <strong id="mood-value">待机</strong></div>
+              <div class="status-pill"><strong id="scale-value">100%</strong></div>
             </div>
-            <div class="interaction-tools__buttons">
-              <button class="interaction-tool-btn" type="button" data-tool="finger" aria-pressed="true">手指</button>
-              <button class="interaction-tool-btn" type="button" data-tool="palm" aria-pressed="false">手掌</button>
-              <button class="interaction-tool-btn" type="button" data-tool="mouth" aria-pressed="false">嘴</button>
-              <button class="interaction-tool-btn" type="button" data-tool="foot" aria-pressed="false">脚</button>
-              <button class="interaction-tool-btn" type="button" data-tool="feather" aria-pressed="false">羽毛</button>
-              <button class="interaction-tool-btn" type="button" data-tool="comb" aria-pressed="false">梳子</button>
-              <button class="interaction-tool-btn" type="button" data-tool="snack" aria-pressed="false">零食</button>
-            </div>
-          </section>
-
-          <section class="skin-switcher" aria-label="助手皮肤">
-            <div class="skin-switcher__copy">
-              <span>助手皮肤</span>
-              <strong id="skin-value">银白半身 UA</strong>
-            </div>
-            <div id="skin-buttons" class="skin-switcher__buttons"></div>
-          </section>
-
-          <div class="status-row">
-            <div class="status-pill">亲密度 <strong id="affection-value">00</strong></div>
-            <div class="status-pill">状态 <strong id="mood-value">待机</strong></div>
-            <div class="status-pill">缩放 <strong id="scale-value">100%</strong></div>
-          </div>
-
-          <div class="control-row">
-            <button id="chat-btn" class="control-btn control-btn--primary" type="button">聊天</button>
-            <button id="snap-btn" class="control-btn" type="button">归位</button>
-            <button id="scale-down-btn" class="control-btn" type="button">-</button>
-            <button id="scale-up-btn" class="control-btn" type="button">+</button>
-            <button id="llm-mode-btn" class="control-btn" type="button" aria-pressed="false">本地</button>
-            <button id="history-btn" class="control-btn" type="button">历史</button>
-            <button id="scene-btn" class="control-btn" type="button" aria-pressed="false">背景</button>
-            <button id="pin-btn" class="control-btn" type="button" aria-pressed="true">取消置顶</button>
-            <button id="close-btn" class="control-btn" type="button">退出</button>
-          </div>
-
-          <p class="note">拖动把手或角色外侧可以移动桌宠，滚轮和 +/- 可以缩放。右键打开 LLM 设置。</p>
+          </aside>
         </section>
       </section>
     </main>

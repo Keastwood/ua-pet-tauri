@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose, Engine as _};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -17,6 +18,7 @@ const DEFAULT_LLM_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_LLM_TIMEOUT_SECS: u64 = 45;
 const LLM_CONFIG_FILE: &str = "llm_config.json";
 const INTERACTION_HISTORY_FILE: &str = "interaction_history.json";
+const CUSTOM_SKINS_DIR: &str = "custom_skins";
 const MAX_HISTORY_RECORDS: usize = 240;
 const PET_INPUT_SHORTCUT_LABEL: &str = "Ctrl+Alt+Space";
 const DEFAULT_PET_INTERACTION_SYSTEM_PROMPT: &str = "你是银白发桌宠，正在和用户互动。用户会先选择一个交互控件，例如手指、手掌、嘴、脚、羽毛、梳子或零食，再点击桌宠的具体部位。请参考控件、部位、坐标和最近交互历史，用中文给出一句自然、温柔、俏皮的桌宠回应。回复不超过 42 个汉字，不要解释，不要加引号。";
@@ -159,6 +161,73 @@ struct LlmUsage {
     total_tokens: Option<u32>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CustomSkinAssets {
+    idle: String,
+    surprised: String,
+    blink: String,
+    mouth_talk: String,
+    mouth_o: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CustomSkinManifest {
+    schema_version: u32,
+    id: String,
+    name: String,
+    layout: String,
+    asset_width: u32,
+    asset_height: u32,
+    hit_calibration_y: f64,
+    assets: CustomSkinAssets,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveCustomSkinImages {
+    idle_data_url: String,
+    surprised_data_url: String,
+    blink_data_url: String,
+    mouth_talk_data_url: String,
+    mouth_o_data_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveCustomSkinRequest {
+    id: Option<String>,
+    name: String,
+    layout: String,
+    asset_width: u32,
+    asset_height: u32,
+    hit_calibration_y: Option<f64>,
+    images: SaveCustomSkinImages,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CustomSkinImagePaths {
+    idle: String,
+    surprised: String,
+    blink: String,
+    mouth_talk: String,
+    mouth_o: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CustomSkinView {
+    id: String,
+    name: String,
+    layout: String,
+    asset_width: u32,
+    asset_height: u32,
+    hit_calibration_y: f64,
+    images: CustomSkinImagePaths,
+}
+
 #[derive(Debug, Serialize)]
 struct OpenAiCompatibleChatRequest<'a> {
     model: &'a str,
@@ -255,6 +324,96 @@ fn interaction_history_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|error| format!("获取应用配置目录失败：{error}"))?;
     fs::create_dir_all(&dir).map_err(|error| format!("创建应用配置目录失败：{error}"))?;
     Ok(dir.join(INTERACTION_HISTORY_FILE))
+}
+
+fn custom_skins_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("获取应用数据目录失败：{error}"))?
+        .join(CUSTOM_SKINS_DIR);
+    fs::create_dir_all(&dir).map_err(|error| format!("创建自定义皮肤目录失败：{error}"))?;
+    Ok(dir)
+}
+
+fn current_timestamp_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
+}
+
+fn sanitize_skin_id(value: &str) -> String {
+    let mut id = String::new();
+    let mut last_was_dash = false;
+
+    for character in value.trim().to_lowercase().chars() {
+        if character.is_ascii_alphanumeric() {
+            id.push(character);
+            last_was_dash = false;
+        } else if !last_was_dash {
+            id.push('-');
+            last_was_dash = true;
+        }
+    }
+
+    let cleaned = id.trim_matches('-').to_string();
+    if cleaned.is_empty() {
+        format!("custom-skin-{}", current_timestamp_ms())
+    } else {
+        cleaned
+    }
+}
+
+fn normalize_skin_layout(value: &str) -> String {
+    if value == "fullBody" {
+        "fullBody".to_string()
+    } else {
+        "halfBody".to_string()
+    }
+}
+
+fn decode_data_url(data_url: &str) -> Result<Vec<u8>, String> {
+    const MAX_IMAGE_BYTES: usize = 24 * 1024 * 1024;
+    let encoded = data_url
+        .split_once(',')
+        .map(|(_, encoded)| encoded)
+        .unwrap_or(data_url)
+        .trim();
+    let bytes = general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|error| format!("解析图片数据失败：{error}"))?;
+
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err("图片太大了，请先压缩后再添加。".to_string());
+    }
+
+    Ok(bytes)
+}
+
+fn write_skin_data_url(path: &Path, data_url: &str) -> Result<(), String> {
+    let bytes = decode_data_url(data_url)?;
+    fs::write(path, bytes).map_err(|error| format!("保存皮肤图片失败：{error}"))
+}
+
+fn manifest_to_custom_skin_view(skin_dir: &Path, manifest: CustomSkinManifest) -> CustomSkinView {
+    let image_path = |asset: &str| skin_dir.join(asset).to_string_lossy().to_string();
+
+    CustomSkinView {
+        id: manifest.id,
+        name: manifest.name,
+        layout: manifest.layout,
+        asset_width: manifest.asset_width,
+        asset_height: manifest.asset_height,
+        hit_calibration_y: manifest.hit_calibration_y,
+        images: CustomSkinImagePaths {
+            idle: image_path(&manifest.assets.idle),
+            surprised: image_path(&manifest.assets.surprised),
+            blink: image_path(&manifest.assets.blink),
+            mouth_talk: image_path(&manifest.assets.mouth_talk),
+            mouth_o: image_path(&manifest.assets.mouth_o),
+        },
+    }
 }
 
 fn load_stored_llm_config(app: &AppHandle) -> Result<StoredLlmConfig, String> {
@@ -1139,6 +1298,94 @@ async fn llm_chat_from_env(request: LlmChatRequest) -> Result<LlmChatResponse, S
 }
 
 #[tauri::command]
+fn list_custom_skins(app: AppHandle) -> Result<Vec<CustomSkinView>, String> {
+    let dir = custom_skins_dir(&app)?;
+    let mut skins = Vec::new();
+
+    for entry in fs::read_dir(&dir).map_err(|error| format!("读取自定义皮肤目录失败：{error}"))? {
+        let entry = entry.map_err(|error| format!("读取自定义皮肤失败：{error}"))?;
+        let skin_dir = entry.path();
+        if !skin_dir.is_dir() {
+            continue;
+        }
+
+        let manifest_path = skin_dir.join("manifest.json");
+        if !manifest_path.exists() {
+            continue;
+        }
+
+        let text = fs::read_to_string(&manifest_path)
+            .map_err(|error| format!("读取自定义皮肤清单失败：{error}"))?;
+        match serde_json::from_str::<CustomSkinManifest>(&text) {
+            Ok(manifest) => skins.push(manifest_to_custom_skin_view(&skin_dir, manifest)),
+            Err(error) => eprintln!("Failed to parse custom skin manifest {:?}: {error}", manifest_path),
+        }
+    }
+
+    skins.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(skins)
+}
+
+#[tauri::command]
+fn save_custom_skin(app: AppHandle, request: SaveCustomSkinRequest) -> Result<CustomSkinView, String> {
+    if request.asset_width == 0 || request.asset_height == 0 {
+        return Err("皮肤图片尺寸无效。".to_string());
+    }
+
+    let name = clean_required(&request.name, "皮肤名称")?;
+    let layout = normalize_skin_layout(&request.layout);
+    let root = custom_skins_dir(&app)?;
+    let requested_id = request.id.as_deref().unwrap_or(&name);
+    let mut id = sanitize_skin_id(requested_id);
+    let mut skin_dir = root.join(&id);
+
+    if skin_dir.exists() {
+        id = format!("{id}-{}", current_timestamp_ms());
+        skin_dir = root.join(&id);
+    }
+
+    fs::create_dir_all(&skin_dir).map_err(|error| format!("创建皮肤目录失败：{error}"))?;
+
+    let assets = CustomSkinAssets {
+        idle: "idle.png".to_string(),
+        surprised: "surprised.png".to_string(),
+        blink: "blink_overlay.png".to_string(),
+        mouth_talk: "mouth_talk_overlay.png".to_string(),
+        mouth_o: "mouth_o_overlay.png".to_string(),
+    };
+
+    write_skin_data_url(&skin_dir.join(&assets.idle), &request.images.idle_data_url)?;
+    write_skin_data_url(
+        &skin_dir.join(&assets.surprised),
+        &request.images.surprised_data_url,
+    )?;
+    write_skin_data_url(&skin_dir.join(&assets.blink), &request.images.blink_data_url)?;
+    write_skin_data_url(
+        &skin_dir.join(&assets.mouth_talk),
+        &request.images.mouth_talk_data_url,
+    )?;
+    write_skin_data_url(&skin_dir.join(&assets.mouth_o), &request.images.mouth_o_data_url)?;
+
+    let manifest = CustomSkinManifest {
+        schema_version: 1,
+        id,
+        name,
+        layout,
+        asset_width: request.asset_width,
+        asset_height: request.asset_height,
+        hit_calibration_y: request.hit_calibration_y.unwrap_or(0.0),
+        assets,
+    };
+
+    let manifest_text = serde_json::to_string_pretty(&manifest)
+        .map_err(|error| format!("生成皮肤清单失败：{error}"))?;
+    fs::write(skin_dir.join("manifest.json"), manifest_text)
+        .map_err(|error| format!("保存皮肤清单失败：{error}"))?;
+
+    Ok(manifest_to_custom_skin_view(&skin_dir, manifest))
+}
+
+#[tauri::command]
 fn move_pet_window(window: Window, x: f64, y: f64) -> Result<(), String> {
     window
         .set_position(Position::Logical(LogicalPosition::new(x, y)))
@@ -1213,10 +1460,12 @@ pub fn run() {
             clear_interaction_history,
             get_llm_config,
             get_interaction_history,
+            list_custom_skins,
             llm_chat,
             llm_pet_interact,
             llm_pet_interact_stream,
             save_llm_config,
+            save_custom_skin,
             move_pet_window,
             resize_pet_window,
             start_pet_drag,

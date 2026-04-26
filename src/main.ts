@@ -1,7 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-import { DEFAULT_PET_SKIN_ID, PET_SKINS, getPetSkin } from "./skins";
+import { DEFAULT_PET_SKIN_ID, PET_SKINS as BUILT_IN_PET_SKINS, getPetSkin as getBuiltInPetSkin } from "./skins";
 import type { PetSkinDefinition, PetSkinLayoutId } from "./skinTypes";
 
 type Tone = "warm" | "alert" | "hint";
@@ -106,6 +106,40 @@ interface InteractionTool {
   verb: string;
 }
 
+interface CustomSkinImagePaths {
+  idle: string;
+  surprised: string;
+  blink: string;
+  mouthTalk: string;
+  mouthO: string;
+}
+
+interface CustomSkinView {
+  id: string;
+  name: string;
+  layout: PetSkinLayoutId;
+  assetWidth: number;
+  assetHeight: number;
+  hitCalibrationY: number;
+  images: CustomSkinImagePaths;
+}
+
+interface SaveCustomSkinRequest {
+  id: string;
+  name: string;
+  layout: PetSkinLayoutId;
+  assetWidth: number;
+  assetHeight: number;
+  hitCalibrationY: number;
+  images: {
+    idleDataUrl: string;
+    surprisedDataUrl: string;
+    blinkDataUrl: string;
+    mouthTalkDataUrl: string;
+    mouthODataUrl: string;
+  };
+}
+
 const BASE_WINDOW_WIDTH = 430;
 const BASE_WINDOW_HEIGHT = 1080;
 const MIN_SCALE = 0.75;
@@ -120,12 +154,12 @@ const PET_LLM_SYSTEM_PROMPT =
   "你是一个银白发桌宠，会陪用户工作和休息。请用中文回复，语气温柔、俏皮、像桌宠在说话。每次只说一句，控制在 36 个汉字以内，不要解释，不要加引号。";
 
 const INTERACTION_TOOLS: InteractionTool[] = [
-  { id: "finger", label: "手指", verb: "轻点" },
-  { id: "palm", label: "手掌", verb: "轻拍" },
-  { id: "mouth", label: "嘴", verb: "亲近" },
-  { id: "foot", label: "脚", verb: "轻踢" },
-  { id: "feather", label: "羽毛", verb: "轻挠" },
-  { id: "comb", label: "梳子", verb: "梳理" },
+  { id: "finger", label: "手指", verb: "戳戳" },
+  { id: "palm", label: "手掌", verb: "揉捏" },
+  { id: "mouth", label: "嘴", verb: "亲吻" },
+  { id: "foot", label: "脚", verb: "踩" },
+  { id: "feather", label: "舌头", verb: "舔" },
+  { id: "comb", label: "鸡鸡", verb: "插入" },
   { id: "snack", label: "零食", verb: "投喂" },
 ];
 
@@ -151,6 +185,7 @@ const HALF_BODY_HIT_AREA_RULES: PetHitAreaRule[] = [
   { label: "锁骨", shape: "rect", x: 34, y: 62, width: 32, height: 7.8 },
   { label: "胸口", shape: "ellipse", x: 30, y: 65.5, width: 40, height: 14 },
   { label: "左胸", shape: "ellipse", x: 11, y: 72.5, width: 18, height: 9 },
+  { label: "小腹", shape: "rect", x: 35, y: 95, width: 30, height: 12 },
   { label: "腹部", shape: "rect", x: 28, y: 76, width: 44, height: 12 },
   { label: "腰部", shape: "rect", x: 20, y: 88, width: 60, height: 7.5 },
   { label: "左手臂", shape: "rect", x: 0, y: 64, width: 25, height: 34 },
@@ -187,7 +222,7 @@ const FULL_BODY_HIT_AREA_RULES: PetHitAreaRule[] = [
   { label: "腹部", shape: "rect", x: 34, y: 65.5, width: 32, height: 12 },
   { label: "肚脐", shape: "ellipse", x: 45, y: 77.2, width: 10, height: 5 },
   { label: "腰部", shape: "rect", x: 26, y: 80, width: 48, height: 7 },
-  { label: "胯部", shape: "ellipse", x: 28, y: 85.5, width: 44, height: 9 },
+  { label: "小穴", shape: "ellipse", x: 28, y: 85.5, width: 44, height: 9 },
   { label: "左大腿", shape: "rect", x: 25, y: 91, width: 21, height: 9 },
   { label: "右大腿", shape: "rect", x: 54, y: 91, width: 21, height: 9 },
   { label: "头发", shape: "rect", x: 0, y: 10, width: 100, height: 34 },
@@ -197,6 +232,9 @@ const PET_HIT_AREA_RULES_BY_LAYOUT: Record<PetSkinLayoutId, PetHitAreaRule[]> = 
   halfBody: HALF_BODY_HIT_AREA_RULES,
   fullBody: FULL_BODY_HIT_AREA_RULES,
 };
+
+let customPetSkins: PetSkinDefinition[] = [];
+let availablePetSkins: PetSkinDefinition[] = [...BUILT_IN_PET_SKINS];
 
 const state: PetState = {
   affection: 0,
@@ -248,6 +286,32 @@ function getInteractionTool(id: string | null | undefined): InteractionTool {
 
 function getHitAreaRules(skin: PetSkinDefinition): PetHitAreaRule[] {
   return PET_HIT_AREA_RULES_BY_LAYOUT[skin.layout] ?? HALF_BODY_HIT_AREA_RULES;
+}
+
+function syncAvailablePetSkins(): void {
+  availablePetSkins = [...BUILT_IN_PET_SKINS, ...customPetSkins];
+}
+
+function findPetSkin(id: string | null | undefined): PetSkinDefinition {
+  return availablePetSkins.find((skin) => skin.id === id) ?? getBuiltInPetSkin(id);
+}
+
+function customSkinViewToDefinition(skin: CustomSkinView): PetSkinDefinition {
+  return {
+    id: skin.id,
+    name: skin.name,
+    layout: skin.layout,
+    assetWidth: skin.assetWidth,
+    assetHeight: skin.assetHeight,
+    hitCalibrationY: skin.hitCalibrationY,
+    images: {
+      idle: convertFileSrc(skin.images.idle),
+      surprised: convertFileSrc(skin.images.surprised),
+      blink: convertFileSrc(skin.images.blink),
+      mouthTalk: convertFileSrc(skin.images.mouthTalk),
+      mouthO: convertFileSrc(skin.images.mouthO),
+    },
+  };
 }
 
 function must<T extends HTMLElement>(selector: string): T {
@@ -357,13 +421,19 @@ window.addEventListener("DOMContentLoaded", () => {
   );
   const skinValue = must<HTMLElement>("#skin-value");
   const skinButtons = must<HTMLDivElement>("#skin-buttons");
+  const skinFileInput = must<HTMLInputElement>("#skin-file-input");
+  const skinNameInput = must<HTMLInputElement>("#skin-name-input");
+  const skinLayoutSelect = must<HTMLSelectElement>("#skin-layout-select");
+  const skinTransparentInput = must<HTMLInputElement>("#skin-transparent-input");
+  const skinAddButton = must<HTMLButtonElement>("#skin-add-btn");
+  const skinImportStatus = must<HTMLParagraphElement>("#skin-import-status");
   const fxLayer = must<HTMLDivElement>("#fx-layer");
   const baseLayer = must<HTMLImageElement>("#base-layer");
   const blinkLayer = must<HTMLImageElement>("#blink-layer");
   const talkLayer = must<HTMLImageElement>("#talk-layer");
   const mouthOLayer = must<HTMLImageElement>("#mouth-o-layer");
   let llmRequestId = 0;
-  let activeSkin = getPetSkin(state.selectedSkinId);
+  let activeSkin = findPetSkin(state.selectedSkinId);
 
   function preloadSkin(skin: PetSkinDefinition): void {
     const sources = [
@@ -404,7 +474,7 @@ window.addEventListener("DOMContentLoaded", () => {
   function renderSkinButtons(): void {
     skinButtons.replaceChildren();
 
-    for (const skin of PET_SKINS) {
+    for (const skin of availablePetSkins) {
       const button = document.createElement("button");
       button.className = "skin-switcher__btn";
       button.type = "button";
@@ -443,7 +513,7 @@ window.addEventListener("DOMContentLoaded", () => {
       button.setAttribute("aria-pressed", String(button.dataset.tool === selectedTool.id));
     }
 
-    const selectedSkin = getPetSkin(state.selectedSkinId);
+    const selectedSkin = findPetSkin(state.selectedSkinId);
     skinValue.textContent = selectedSkin.name;
     for (const button of skinButtons.querySelectorAll<HTMLButtonElement>(".skin-switcher__btn[data-skin]")) {
       button.setAttribute("aria-pressed", String(button.dataset.skin === selectedSkin.id));
@@ -451,7 +521,7 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function setPetSkin(skinId: string | null | undefined, options: { persist?: boolean; announce?: boolean } = {}): void {
-    const skin = getPetSkin(skinId);
+    const skin = findPetSkin(skinId);
     state.selectedSkinId = skin.id;
     applySkinVisuals(skin);
 
@@ -463,6 +533,214 @@ window.addEventListener("DOMContentLoaded", () => {
 
     if (options.announce) {
       setBubble(`已换成 ${skin.name}，部位映射使用${skin.layout === "fullBody" ? "全身立绘" : "半身"}版。`, "hint", 2100);
+    }
+  }
+
+  function setSkinImportStatus(text: string): void {
+    skinImportStatus.textContent = text;
+  }
+
+  function setSkinImportBusy(busy: boolean, text?: string): void {
+    skinAddButton.disabled = busy;
+    skinNameInput.disabled = busy;
+    skinLayoutSelect.disabled = busy;
+    skinTransparentInput.disabled = busy;
+    if (text) {
+      setSkinImportStatus(text);
+    }
+  }
+
+  function getSelectedSkinLayout(): PetSkinLayoutId {
+    return skinLayoutSelect.value === "fullBody" ? "fullBody" : "halfBody";
+  }
+
+  function getFileBaseName(file: File): string {
+    return file.name.replace(/\.[^.]+$/, "").trim() || "自定义皮肤";
+  }
+
+  function slugifySkinId(value: string): string {
+    const slug = value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    return slug || `custom-skin-${Date.now()}`;
+  }
+
+  function upsertCustomSkin(skin: CustomSkinView): PetSkinDefinition {
+    const definition = customSkinViewToDefinition(skin);
+    customPetSkins = [definition, ...customPetSkins.filter((item) => item.id !== definition.id)];
+    syncAvailablePetSkins();
+    renderSkinButtons();
+    return definition;
+  }
+
+  async function loadCustomPetSkins(preferredSkinId?: string | null): Promise<void> {
+    try {
+      const skins = await invoke<CustomSkinView[]>("list_custom_skins");
+      customPetSkins = skins.map(customSkinViewToDefinition);
+      syncAvailablePetSkins();
+      renderSkinButtons();
+
+      if (preferredSkinId && availablePetSkins.some((skin) => skin.id === preferredSkinId)) {
+        setPetSkin(preferredSkinId, { persist: false });
+      } else {
+        updateStatus();
+      }
+    } catch (error) {
+      console.error(error);
+      setSkinImportStatus(`读取自定义皮肤失败：${String(error)}`);
+    }
+  }
+
+  async function loadImageFileToCanvas(file: File): Promise<HTMLCanvasElement> {
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.decoding = "async";
+    image.src = objectUrl;
+
+    try {
+      await image.decode();
+      const maxEdge = 1800;
+      const scale = Math.min(1, maxEdge / Math.max(image.naturalWidth, image.naturalHeight));
+      const width = Math.max(1, Math.round(image.naturalWidth * scale));
+      const height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      if (!context) {
+        throw new Error("无法创建图片画布。");
+      }
+
+      context.drawImage(image, 0, 0, width, height);
+      return canvas;
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+
+  function transparentizeEdgeBackground(canvas: HTMLCanvasElement, tolerance = 34): number {
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context || canvas.width === 0 || canvas.height === 0) {
+      return 0;
+    }
+
+    const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+    const { data, width, height } = imageData;
+    const baseR = data[0];
+    const baseG = data[1];
+    const baseB = data[2];
+    const threshold = tolerance * tolerance;
+    const visited = new Uint8Array(width * height);
+    const queue: number[] = [];
+
+    const pushIfBackground = (x: number, y: number): void => {
+      if (x < 0 || x >= width || y < 0 || y >= height) {
+        return;
+      }
+
+      const index = y * width + x;
+      if (visited[index]) {
+        return;
+      }
+
+      const offset = index * 4;
+      const dr = data[offset] - baseR;
+      const dg = data[offset + 1] - baseG;
+      const db = data[offset + 2] - baseB;
+      if (data[offset + 3] > 0 && dr * dr + dg * dg + db * db <= threshold) {
+        visited[index] = 1;
+        queue.push(index);
+      }
+    };
+
+    for (let x = 0; x < width; x += 1) {
+      pushIfBackground(x, 0);
+      pushIfBackground(x, height - 1);
+    }
+
+    for (let y = 0; y < height; y += 1) {
+      pushIfBackground(0, y);
+      pushIfBackground(width - 1, y);
+    }
+
+    for (let head = 0; head < queue.length; head += 1) {
+      const index = queue[head];
+      const x = index % width;
+      const y = Math.floor(index / width);
+      pushIfBackground(x + 1, y);
+      pushIfBackground(x - 1, y);
+      pushIfBackground(x, y + 1);
+      pushIfBackground(x, y - 1);
+    }
+
+    for (const index of queue) {
+      data[index * 4 + 3] = 0;
+    }
+
+    context.putImageData(imageData, 0, 0);
+    return queue.length;
+  }
+
+  function createBlankSkinOverlayDataUrl(width: number, height: number): string {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    return canvas.toDataURL("image/png");
+  }
+
+  async function buildCustomSkinRequest(file: File): Promise<SaveCustomSkinRequest> {
+    const name = skinNameInput.value.trim() || getFileBaseName(file);
+    const layout = getSelectedSkinLayout();
+    const canvas = await loadImageFileToCanvas(file);
+    const removedPixels = skinTransparentInput.checked ? transparentizeEdgeBackground(canvas) : 0;
+    const idleDataUrl = canvas.toDataURL("image/png");
+    const blankOverlay = createBlankSkinOverlayDataUrl(canvas.width, canvas.height);
+
+    setSkinImportStatus(
+      skinTransparentInput.checked
+        ? `已处理边缘背景 ${removedPixels.toLocaleString("zh-CN")} 像素，正在保存皮肤...`
+        : "保留原图背景，正在保存皮肤...",
+    );
+
+    return {
+      id: `user-${slugifySkinId(name)}`,
+      name,
+      layout,
+      assetWidth: canvas.width,
+      assetHeight: canvas.height,
+      hitCalibrationY: layout === "halfBody" ? 7.2 : 0,
+      images: {
+        idleDataUrl,
+        surprisedDataUrl: idleDataUrl,
+        blinkDataUrl: blankOverlay,
+        mouthTalkDataUrl: blankOverlay,
+        mouthODataUrl: blankOverlay,
+      },
+    };
+  }
+
+  async function importCustomSkinFile(file: File): Promise<void> {
+    if (!file.type.startsWith("image/")) {
+      setSkinImportStatus("请选择 PNG、JPEG、WebP 等图片文件。");
+      return;
+    }
+
+    setSkinImportBusy(true, "正在读取图片并生成皮肤文件...");
+
+    try {
+      const request = await buildCustomSkinRequest(file);
+      const savedSkin = await invoke<CustomSkinView>("save_custom_skin", { request });
+      const skin = upsertCustomSkin(savedSkin);
+      setPetSkin(skin.id, { announce: true });
+      skinNameInput.value = "";
+      setSkinImportStatus(`已添加 ${skin.name}，以后启动也会保留。`);
+    } catch (error) {
+      console.error(error);
+      setSkinImportStatus(`添加失败：${String(error)}`);
+    } finally {
+      skinFileInput.value = "";
+      setSkinImportBusy(false);
     }
   }
 
@@ -1400,6 +1678,17 @@ window.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  skinAddButton.addEventListener("click", () => {
+    skinFileInput.click();
+  });
+
+  skinFileInput.addEventListener("change", () => {
+    const file = skinFileInput.files?.[0];
+    if (file) {
+      void importCustomSkinFile(file);
+    }
+  });
+
   floatingInput.addEventListener("submit", (event) => {
     event.preventDefault();
     void submitFloatingInput();
@@ -1416,7 +1705,7 @@ window.addEventListener("DOMContentLoaded", () => {
     "wheel",
     (event) => {
       const target = event.target as HTMLElement;
-      if (target.closest(".control-row") || target.closest(".interaction-tools") || target.closest(".skin-switcher")) {
+      if (target.closest(".side-dock")) {
         return;
       }
       event.preventDefault();
@@ -1520,6 +1809,7 @@ window.addEventListener("DOMContentLoaded", () => {
   setLlmInteractionMode(savedLlmInteractionMode, { persist: false });
   setInteractionTool(savedInteractionTool, { persist: false });
   void applyScale(savedScale, { persist: false, showBubble: false, ensureDocked: true });
+  void loadCustomPetSkins(savedSkin);
 
   void listen("pet-open-input", () => {
     openFloatingInput();
