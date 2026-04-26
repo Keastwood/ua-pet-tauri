@@ -150,6 +150,8 @@ const SCENE_MODE_STORAGE_KEY = "silver-pet.scene-mode.v1";
 const LLM_INTERACTION_MODE_STORAGE_KEY = "silver-pet.llm-interaction-mode.v1";
 const INTERACTION_TOOL_STORAGE_KEY = "silver-pet.interaction-tool.v1";
 const PET_SKIN_STORAGE_KEY = "silver-pet.skin.v1";
+const PET_SKIN_PROMPTS_STORAGE_KEY = "silver-pet.skin-prompts.v1";
+const PET_HIDDEN_SKINS_STORAGE_KEY = "silver-pet.hidden-skins.v1";
 const PET_LLM_SYSTEM_PROMPT =
   "你是一个银白发桌宠，会陪用户工作和休息。请用中文回复，语气温柔、俏皮、像桌宠在说话。每次只说一句，控制在 36 个汉字以内，不要解释，不要加引号。";
 
@@ -235,6 +237,8 @@ const PET_HIT_AREA_RULES_BY_LAYOUT: Record<PetSkinLayoutId, PetHitAreaRule[]> = 
 
 let customPetSkins: PetSkinDefinition[] = [];
 let availablePetSkins: PetSkinDefinition[] = [...BUILT_IN_PET_SKINS];
+let hiddenPetSkinIds = readStoredStringSet(PET_HIDDEN_SKINS_STORAGE_KEY);
+let skinPromptOverrides = readStoredStringRecord(PET_SKIN_PROMPTS_STORAGE_KEY);
 
 const state: PetState = {
   affection: 0,
@@ -280,6 +284,44 @@ function pick<T>(items: readonly T[]): T {
   return items[Math.floor(Math.random() * items.length)];
 }
 
+function readStoredStringRecord(key: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) ?? "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+    );
+  } catch (error) {
+    console.warn(`Failed to read ${key}:`, error);
+    return {};
+  }
+}
+
+function readStoredStringSet(key: string): Set<string> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) ?? "[]");
+    if (!Array.isArray(parsed)) {
+      return new Set();
+    }
+
+    return new Set(parsed.filter((value): value is string => typeof value === "string"));
+  } catch (error) {
+    console.warn(`Failed to read ${key}:`, error);
+    return new Set();
+  }
+}
+
+function saveSkinPromptOverrides(): void {
+  localStorage.setItem(PET_SKIN_PROMPTS_STORAGE_KEY, JSON.stringify(skinPromptOverrides));
+}
+
+function saveHiddenPetSkins(): void {
+  localStorage.setItem(PET_HIDDEN_SKINS_STORAGE_KEY, JSON.stringify(Array.from(hiddenPetSkinIds)));
+}
+
 function getInteractionTool(id: string | null | undefined): InteractionTool {
   return INTERACTION_TOOLS.find((tool) => tool.id === id) ?? INTERACTION_TOOLS[0];
 }
@@ -289,11 +331,25 @@ function getHitAreaRules(skin: PetSkinDefinition): PetHitAreaRule[] {
 }
 
 function syncAvailablePetSkins(): void {
-  availablePetSkins = [...BUILT_IN_PET_SKINS, ...customPetSkins];
+  availablePetSkins = [...BUILT_IN_PET_SKINS, ...customPetSkins].filter(
+    (skin) => skin.id === DEFAULT_PET_SKIN_ID || !hiddenPetSkinIds.has(skin.id),
+  );
 }
 
 function findPetSkin(id: string | null | undefined): PetSkinDefinition {
-  return availablePetSkins.find((skin) => skin.id === id) ?? getBuiltInPetSkin(id);
+  return (
+    availablePetSkins.find((skin) => skin.id === id) ??
+    availablePetSkins.find((skin) => skin.id === DEFAULT_PET_SKIN_ID) ??
+    getBuiltInPetSkin(DEFAULT_PET_SKIN_ID)
+  );
+}
+
+function getSkinPrompt(skinId: string | null | undefined): string {
+  return (skinPromptOverrides[skinId ?? ""] ?? "").trim();
+}
+
+function isRuntimeCustomSkin(skinId: string): boolean {
+  return customPetSkins.some((skin) => skin.id === skinId);
 }
 
 function customSkinViewToDefinition(skin: CustomSkinView): PetSkinDefinition {
@@ -390,6 +446,7 @@ window.addEventListener("DOMContentLoaded", () => {
   const historyRefreshButton = must<HTMLButtonElement>("#history-refresh-btn");
   const floatingInput = must<HTMLFormElement>("#floating-input");
   const floatingTextInput = must<HTMLInputElement>("#floating-text-input");
+  const floatingKeepOpenInput = must<HTMLInputElement>("#floating-keep-open-input");
   const floatingInputHint = must<HTMLParagraphElement>("#floating-input-hint");
   const settingsForm = must<HTMLFormElement>("#llm-settings-form");
   const settingsStatus = must<HTMLParagraphElement>("#settings-status");
@@ -429,6 +486,11 @@ window.addEventListener("DOMContentLoaded", () => {
   const skinTransparentInput = must<HTMLInputElement>("#skin-transparent-input");
   const skinAddButton = must<HTMLButtonElement>("#skin-add-btn");
   const skinImportStatus = must<HTMLParagraphElement>("#skin-import-status");
+  const skinPromptSelect = must<HTMLSelectElement>("#skin-prompt-select");
+  const skinPromptInput = must<HTMLTextAreaElement>("#skin-prompt-input");
+  const skinPromptSaveButton = must<HTMLButtonElement>("#skin-prompt-save-btn");
+  const skinPromptClearButton = must<HTMLButtonElement>("#skin-prompt-clear-btn");
+  const skinPromptStatus = must<HTMLParagraphElement>("#skin-prompt-status");
   const skinDeleteSelect = must<HTMLSelectElement>("#skin-delete-select");
   const skinDeleteButton = must<HTMLButtonElement>("#skin-delete-btn");
   const fxLayer = must<HTMLDivElement>("#fx-layer");
@@ -499,25 +561,55 @@ window.addEventListener("DOMContentLoaded", () => {
       skinButtons.appendChild(button);
     }
 
-    renderCustomSkinDeleteOptions();
+    renderSkinPromptOptions();
+    renderSkinDeleteOptions();
   }
 
-  function renderCustomSkinDeleteOptions(): void {
+  function renderSkinPromptOptions(): void {
+    const previousValue = skinPromptSelect.value || state.selectedSkinId;
+    skinPromptSelect.replaceChildren();
+
+    for (const skin of availablePetSkins) {
+      const option = document.createElement("option");
+      option.value = skin.id;
+      option.textContent = skin.name;
+      skinPromptSelect.appendChild(option);
+    }
+
+    const nextValue = availablePetSkins.some((skin) => skin.id === previousValue)
+      ? previousValue
+      : state.selectedSkinId;
+    skinPromptSelect.value = nextValue;
+    loadSkinPromptEditor(nextValue);
+  }
+
+  function loadSkinPromptEditor(skinId: string): void {
+    const skin = findPetSkin(skinId);
+    skinPromptSelect.value = skin.id;
+    skinPromptInput.value = getSkinPrompt(skin.id);
+    skinPromptStatus.textContent = skinPromptInput.value
+      ? `${skin.name} 已有专属设定，LLM 交互会自动带上。`
+      : `${skin.name} 目前使用全局提示词。`;
+  }
+
+  function renderSkinDeleteOptions(): void {
     skinDeleteSelect.replaceChildren();
 
-    if (customPetSkins.length === 0) {
+    const removableSkins = availablePetSkins.filter((skin) => skin.id !== DEFAULT_PET_SKIN_ID);
+
+    if (removableSkins.length === 0) {
       const option = document.createElement("option");
       option.value = "";
-      option.textContent = "没有可删除的自定义皮肤";
+      option.textContent = "没有可删除或隐藏的皮肤";
       skinDeleteSelect.appendChild(option);
       skinDeleteButton.disabled = true;
       return;
     }
 
-    for (const skin of customPetSkins) {
+    for (const skin of removableSkins) {
       const option = document.createElement("option");
       option.value = skin.id;
-      option.textContent = skin.name;
+      option.textContent = isRuntimeCustomSkin(skin.id) ? `${skin.name}（本地文件）` : `${skin.name}（隐藏）`;
       skinDeleteSelect.appendChild(option);
     }
 
@@ -563,6 +655,7 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function setPetSkin(skinId: string | null | undefined, options: { persist?: boolean; announce?: boolean } = {}): void {
+    const previousSkinId = state.selectedSkinId;
     const skin = findPetSkin(skinId);
     state.selectedSkinId = skin.id;
     applySkinVisuals(skin);
@@ -572,6 +665,9 @@ window.addEventListener("DOMContentLoaded", () => {
     }
 
     updateStatus();
+    if (!settingsPanel.hidden && (skinPromptSelect.value === previousSkinId || skinPromptSelect.value === skin.id)) {
+      loadSkinPromptEditor(skin.id);
+    }
 
     if (options.announce) {
       setBubble(`已换成 ${skin.name}，部位映射使用${skin.layout === "fullBody" ? "全身立绘" : "半身"}版。`, "hint", 2100);
@@ -786,20 +882,56 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function saveSelectedSkinPrompt(): void {
+    const skin = findPetSkin(skinPromptSelect.value);
+    const prompt = skinPromptInput.value.trim();
+
+    if (prompt) {
+      skinPromptOverrides = { ...skinPromptOverrides, [skin.id]: prompt };
+      skinPromptStatus.textContent = `${skin.name} 的专属设定已保存。`;
+    } else {
+      const { [skin.id]: _removed, ...rest } = skinPromptOverrides;
+      skinPromptOverrides = rest;
+      skinPromptStatus.textContent = `${skin.name} 已恢复为全局提示词。`;
+    }
+
+    saveSkinPromptOverrides();
+    setBubble(`${skin.name} 的性格设定已更新。`, "hint", 1700);
+  }
+
+  function clearSelectedSkinPrompt(): void {
+    const skin = findPetSkin(skinPromptSelect.value);
+    const { [skin.id]: _removed, ...rest } = skinPromptOverrides;
+    skinPromptOverrides = rest;
+    skinPromptInput.value = "";
+    saveSkinPromptOverrides();
+    skinPromptStatus.textContent = `${skin.name} 已清空专属设定，会使用全局提示词。`;
+  }
+
   async function deleteSelectedCustomSkin(): Promise<void> {
     const skinId = skinDeleteSelect.value;
     if (!skinId) {
-      setSkinImportStatus("没有选中的自定义皮肤。");
+      setSkinImportStatus("没有选中的皮肤。");
       return;
     }
 
-    const skin = customPetSkins.find((item) => item.id === skinId);
+    const skin = availablePetSkins.find((item) => item.id === skinId);
     const skinName = skin?.name ?? skinId;
+    const wasRuntimeCustomSkin = isRuntimeCustomSkin(skinId);
 
     try {
       skinDeleteButton.disabled = true;
-      await invoke("delete_custom_skin", { id: skinId });
-      customPetSkins = customPetSkins.filter((item) => item.id !== skinId);
+      if (wasRuntimeCustomSkin) {
+        await invoke("delete_custom_skin", { id: skinId });
+        customPetSkins = customPetSkins.filter((item) => item.id !== skinId);
+      } else {
+        hiddenPetSkinIds.add(skinId);
+        saveHiddenPetSkins();
+      }
+
+      const { [skinId]: _removedPrompt, ...restPrompts } = skinPromptOverrides;
+      skinPromptOverrides = restPrompts;
+      saveSkinPromptOverrides();
       syncAvailablePetSkins();
       renderSkinButtons();
 
@@ -809,12 +941,13 @@ window.addEventListener("DOMContentLoaded", () => {
         updateStatus();
       }
 
-      setSkinImportStatus(`已删除 ${skinName}。`);
+      setSkinImportStatus(wasRuntimeCustomSkin ? `已删除 ${skinName}。` : `已隐藏 ${skinName}。`);
     } catch (error) {
       console.error(error);
       setSkinImportStatus(`删除失败：${String(error)}`);
     } finally {
-      renderCustomSkinDeleteOptions();
+      renderSkinPromptOptions();
+      renderSkinDeleteOptions();
     }
   }
 
@@ -899,10 +1032,16 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function buildPetChatMessages(): LlmMessage[] {
+    const skin = findPetSkin(state.selectedSkinId);
+    const skinPrompt = getSkinPrompt(skin.id);
+    const skinPromptText = skinPrompt
+      ? `\n当前皮肤：${skin.name}。\n皮肤专属设定：${skinPrompt}`
+      : `\n当前皮肤：${skin.name}。`;
+
     return [
       {
         role: "system",
-        content: PET_LLM_SYSTEM_PROMPT,
+        content: `${PET_LLM_SYSTEM_PROMPT}${skinPromptText}`,
       },
       {
         role: "user",
@@ -973,7 +1112,8 @@ window.addEventListener("DOMContentLoaded", () => {
   function openSettings(): void {
     settingsPanel.hidden = false;
     settingsPanel.dataset.show = "true";
-    renderCustomSkinDeleteOptions();
+    renderSkinPromptOptions();
+    renderSkinDeleteOptions();
     void loadLlmSettings();
   }
 
@@ -1357,6 +1497,7 @@ window.addEventListener("DOMContentLoaded", () => {
     const { xPercent, yPercent } = getPetPointerPosition(event);
     const selectedTool = getInteractionTool(state.selectedInteractionTool);
     const interactionTool = source === "click" ? selectedTool.label : null;
+    const skin = findPetSkin(state.selectedSkinId);
     const streamId = `${Date.now()}-${requestId}`;
     let streamedContent = "";
     let hasStreamed = false;
@@ -1389,6 +1530,9 @@ window.addEventListener("DOMContentLoaded", () => {
           xPercent: xPercent ?? null,
           yPercent: yPercent ?? null,
           userText: userText?.trim() || null,
+          skinId: skin.id,
+          skinName: skin.name,
+          skinPrompt: getSkinPrompt(skin.id) || null,
           affection: state.affection,
           mood: getMoodLabel(),
           sceneMode: state.sceneMode,
@@ -1428,8 +1572,22 @@ window.addEventListener("DOMContentLoaded", () => {
     }
 
     floatingTextInput.value = "";
-    closeFloatingInput();
+    if (floatingKeepOpenInput.checked) {
+      floatingInputHint.textContent = "保持打开中，可以继续输入下一句。";
+      window.setTimeout(() => {
+        floatingTextInput.focus();
+      }, 0);
+    } else {
+      closeFloatingInput();
+    }
+
     await runLlmInteraction("shortcut", "悬浮输入框", undefined, text);
+
+    if (floatingKeepOpenInput.checked) {
+      window.setTimeout(() => {
+        floatingTextInput.focus();
+      }, 0);
+    }
   }
 
   async function applyScale(nextScale: number, options: ApplyScaleOptions = {}): Promise<void> {
@@ -1780,6 +1938,18 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  skinPromptSelect.addEventListener("change", () => {
+    loadSkinPromptEditor(skinPromptSelect.value);
+  });
+
+  skinPromptSaveButton.addEventListener("click", () => {
+    saveSelectedSkinPrompt();
+  });
+
+  skinPromptClearButton.addEventListener("click", () => {
+    clearSelectedSkinPrompt();
+  });
+
   skinDeleteButton.addEventListener("click", () => {
     void deleteSelectedCustomSkin();
   });
@@ -1884,6 +2054,7 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  syncAvailablePetSkins();
   renderSkinButtons();
   setSettingsTab("llm");
   updateStatus();

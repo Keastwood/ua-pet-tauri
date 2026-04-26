@@ -129,6 +129,12 @@ struct PetInteractionRequest {
     y_percent: Option<f64>,
     #[serde(default, alias = "user_text")]
     user_text: Option<String>,
+    #[serde(default, alias = "skin_id")]
+    skin_id: Option<String>,
+    #[serde(default, alias = "skin_name")]
+    skin_name: Option<String>,
+    #[serde(default, alias = "skin_prompt")]
+    skin_prompt: Option<String>,
     affection: u32,
     mood: String,
     #[serde(default, alias = "scene_mode")]
@@ -781,13 +787,25 @@ fn describe_pet_interaction(request: &PetInteractionRequest) -> String {
     let area = request.area.as_deref().unwrap_or("未指定");
     let interaction_tool = request.interaction_tool.as_deref().unwrap_or("未选择");
     let user_text = request.user_text.as_deref().unwrap_or("");
+    let skin_id = request.skin_id.as_deref().unwrap_or("未指定");
+    let skin_name = request.skin_name.as_deref().unwrap_or("未指定");
+    let skin_prompt = request.skin_prompt.as_deref().unwrap_or("").trim();
     let position = match (request.x_percent, request.y_percent) {
         (Some(x), Some(y)) => format!("{:.1}%, {:.1}%", x, y),
         _ => "未记录".to_string(),
     };
+    let skin_context = if skin_prompt.is_empty() {
+        format!("当前皮肤={}({})；", skin_name, skin_id)
+    } else {
+        format!(
+            "当前皮肤={}({})；皮肤专属设定={}；",
+            skin_name, skin_id, skin_prompt
+        )
+    };
 
     format!(
-        "当前交互：来源={}；用户使用控件={}；目标部位={}；位置={}；用户文本={}；亲密度={}；状态={}；背景模式={}。请生成桌宠回应。",
+        "当前交互：{}来源={}；用户使用控件={}；目标部位={}；位置={}；用户文本={}；亲密度={}；状态={}；背景模式={}。请生成桌宠回应。",
+        skin_context,
         request.source,
         interaction_tool,
         area,

@@ -109,12 +109,34 @@
               </div>
 
               <div class="settings-subcard">
-                <h3>删除自定义皮肤</h3>
+                <h3>皮肤专属提示词</h3>
+                <label class="settings-field">
+                  <span>选择皮肤</span>
+                  <select id="skin-prompt-select" class="skin-importer__select" aria-label="选择要编辑提示词的皮肤"></select>
+                </label>
+                <label class="settings-field">
+                  <span>这个皮肤的人格 / 设定</span>
+                  <textarea
+                    id="skin-prompt-input"
+                    rows="5"
+                    spellcheck="false"
+                    placeholder="例如：你是更活泼的爱心眼 UA，说话更黏人一点。留空则只使用全局提示词。"
+                  ></textarea>
+                </label>
+                <div class="settings-actions">
+                  <button id="skin-prompt-clear-btn" class="settings-btn" type="button">清空</button>
+                  <button id="skin-prompt-save-btn" class="settings-btn settings-btn--primary" type="button">保存皮肤设定</button>
+                </div>
+                <p id="skin-prompt-status" class="settings-hint">切换皮肤后，LLM 会自动带上对应设定。</p>
+              </div>
+
+              <div class="settings-subcard">
+                <h3>删除 / 隐藏皮肤</h3>
                 <div class="skin-delete-row">
                   <select id="skin-delete-select" class="skin-importer__select" aria-label="选择要删除的皮肤"></select>
                   <button id="skin-delete-btn" class="settings-btn settings-btn--danger" type="button">删除</button>
                 </div>
-                <p class="settings-hint">内置皮肤不会出现在这里。删除后如果正在使用该皮肤，会自动切回默认皮肤。</p>
+                <p class="settings-hint">一键添加的皮肤会删除本地文件；随应用生成的皮肤会从列表隐藏。默认皮肤会保留，避免没有可用形象。</p>
               </div>
             </section>
 
@@ -144,6 +166,10 @@
             <input id="floating-text-input" type="text" autocomplete="off" spellcheck="false" />
             <button id="floating-send-btn" class="settings-btn settings-btn--primary" type="submit">发送</button>
           </div>
+          <label class="floating-input-keep">
+            <input id="floating-keep-open-input" type="checkbox" />
+            <span>发送后保持打开</span>
+          </label>
           <p id="floating-input-hint" class="floating-input-hint">快捷键：Ctrl + Alt + Space</p>
         </form>
 
