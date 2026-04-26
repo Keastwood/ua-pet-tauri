@@ -701,6 +701,34 @@ button {
   z-index: 6;
 }
 
+.pet-app[data-interaction-tool="finger"] .hitbox {
+  cursor: url("./assets/cursors/finger.svg") 6 2, pointer;
+}
+
+.pet-app[data-interaction-tool="palm"] .hitbox {
+  cursor: url("./assets/cursors/palm.svg") 14 10, grab;
+}
+
+.pet-app[data-interaction-tool="mouth"] .hitbox {
+  cursor: url("./assets/cursors/mouth.svg") 16 16, pointer;
+}
+
+.pet-app[data-interaction-tool="foot"] .hitbox {
+  cursor: url("./assets/cursors/foot.svg") 13 23, pointer;
+}
+
+.pet-app[data-interaction-tool="feather"] .hitbox {
+  cursor: url("./assets/cursors/feather.svg") 8 24, pointer;
+}
+
+.pet-app[data-interaction-tool="comb"] .hitbox {
+  cursor: url("./assets/cursors/comb.svg") 5 5, pointer;
+}
+
+.pet-app[data-interaction-tool="snack"] .hitbox {
+  cursor: url("./assets/cursors/snack.svg") 16 16, pointer;
+}
+
 .drag-chip {
   position: absolute;
   top: 8px;

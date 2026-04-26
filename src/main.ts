@@ -274,6 +274,7 @@ async function moveWindowToDesktopCorner(scale = state.scale): Promise<void> {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
+  const petApp = must<HTMLElement>(".pet-app");
   const petRoot = must<HTMLDivElement>("#pet");
   const petStage = must<HTMLDivElement>("#pet-stage");
   const petFrame = must<HTMLDivElement>("#pet-frame");
@@ -404,6 +405,7 @@ window.addEventListener("DOMContentLoaded", () => {
   function setInteractionTool(toolId: string | null | undefined, options: { persist?: boolean; announce?: boolean } = {}): void {
     const tool = getInteractionTool(toolId);
     state.selectedInteractionTool = tool.id;
+    petApp.dataset.interactionTool = tool.id;
 
     if (options.persist ?? true) {
       localStorage.setItem(INTERACTION_TOOL_STORAGE_KEY, tool.id);
