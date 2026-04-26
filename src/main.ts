@@ -74,6 +74,20 @@ interface PetInteractionResponse {
   record: InteractionRecord;
 }
 
+interface PetPointerPosition {
+  xPercent?: number;
+  yPercent?: number;
+}
+
+interface PetHitAreaRule {
+  label: string;
+  shape: "rect" | "ellipse";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 const BASE_WINDOW_WIDTH = 430;
 const BASE_WINDOW_HEIGHT = 860;
 const MIN_SCALE = 0.75;
@@ -84,6 +98,36 @@ const SCENE_MODE_STORAGE_KEY = "silver-pet.scene-mode.v1";
 const LLM_INTERACTION_MODE_STORAGE_KEY = "silver-pet.llm-interaction-mode.v1";
 const PET_LLM_SYSTEM_PROMPT =
   "你是一个银白发桌宠，会陪用户工作和休息。请用中文回复，语气温柔、俏皮、像桌宠在说话。每次只说一句，控制在 36 个汉字以内，不要解释，不要加引号。";
+
+const PET_HIT_AREA_RULES: PetHitAreaRule[] = [
+  { label: "嘴巴", shape: "ellipse", x: 43.5, y: 47.2, width: 14, height: 5.4 },
+  { label: "鼻尖", shape: "ellipse", x: 47.7, y: 43.7, width: 5.4, height: 5.8 },
+  { label: "左眼", shape: "ellipse", x: 29.2, y: 36.5, width: 17.4, height: 8.6 },
+  { label: "右眼", shape: "ellipse", x: 53.8, y: 36.5, width: 17.4, height: 8.6 },
+  { label: "眼镜", shape: "rect", x: 27, y: 34.8, width: 47, height: 12.8 },
+  { label: "左脸颊", shape: "ellipse", x: 27.5, y: 43.5, width: 16, height: 8.8 },
+  { label: "右脸颊", shape: "ellipse", x: 56.5, y: 43.5, width: 16, height: 8.8 },
+  { label: "脸", shape: "ellipse", x: 28.5, y: 31.2, width: 43, height: 26 },
+  { label: "呆毛", shape: "ellipse", x: 44.8, y: 8.4, width: 12.8, height: 14.8 },
+  { label: "头顶", shape: "ellipse", x: 27, y: 17, width: 46, height: 17 },
+  { label: "刘海", shape: "rect", x: 31, y: 27.6, width: 37, height: 9.8 },
+  { label: "右侧发饰", shape: "rect", x: 70.5, y: 21.5, width: 17.5, height: 16.5 },
+  { label: "耳朵", shape: "ellipse", x: 72, y: 39.5, width: 10.5, height: 11.8 },
+  { label: "左侧头发", shape: "rect", x: 6, y: 31, width: 22, height: 43 },
+  { label: "右侧头发", shape: "rect", x: 74, y: 31, width: 20, height: 47 },
+  { label: "项圈", shape: "rect", x: 38, y: 58.5, width: 24, height: 6.5 },
+  { label: "衣领", shape: "rect", x: 22, y: 62.2, width: 56, height: 10.8 },
+  { label: "领结", shape: "ellipse", x: 33, y: 68.3, width: 34, height: 13.5 },
+  { label: "胸口徽章", shape: "ellipse", x: 44, y: 63.4, width: 12.5, height: 7 },
+  { label: "左胸口徽章", shape: "ellipse", x: 12, y: 75, width: 17, height: 8.5 },
+  { label: "上衣纽扣", shape: "ellipse", x: 45.2, y: 78.8, width: 10.5, height: 6.5 },
+  { label: "上衣纽扣", shape: "ellipse", x: 45.2, y: 89.5, width: 10.5, height: 6.5 },
+  { label: "左袖子", shape: "rect", x: 0, y: 64, width: 25, height: 36 },
+  { label: "右袖子", shape: "rect", x: 75, y: 64, width: 25, height: 36 },
+  { label: "衣摆", shape: "rect", x: 18, y: 91, width: 64, height: 9 },
+  { label: "毛衣", shape: "rect", x: 20, y: 72, width: 60, height: 28 },
+  { label: "头发", shape: "rect", x: 0, y: 18, width: 100, height: 40 },
+];
 
 const state: PetState = {
   affection: 0,
@@ -500,7 +544,7 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function getPetPointerPosition(event?: MouseEvent): { xPercent?: number; yPercent?: number } {
+  function getPetPointerPosition(event?: MouseEvent): PetPointerPosition {
     if (!event) {
       return {};
     }
@@ -512,6 +556,33 @@ window.addEventListener("DOMContentLoaded", () => {
       xPercent: Number(xPercent.toFixed(1)),
       yPercent: Number(yPercent.toFixed(1)),
     };
+  }
+
+  function isPointInHitRule(position: PetPointerPosition, rule: PetHitAreaRule): boolean {
+    if (position.xPercent === undefined || position.yPercent === undefined) {
+      return false;
+    }
+
+    const x = position.xPercent;
+    const y = position.yPercent;
+
+    if (rule.shape === "rect") {
+      return x >= rule.x && x <= rule.x + rule.width && y >= rule.y && y <= rule.y + rule.height;
+    }
+
+    const radiusX = rule.width / 2;
+    const radiusY = rule.height / 2;
+    const centerX = rule.x + radiusX;
+    const centerY = rule.y + radiusY;
+    const normalizedX = (x - centerX) / radiusX;
+    const normalizedY = (y - centerY) / radiusY;
+    return normalizedX * normalizedX + normalizedY * normalizedY <= 1;
+  }
+
+  function resolvePetHitArea(event: MouseEvent | undefined, fallback: string): string {
+    const position = getPetPointerPosition(event);
+    const matchedRule = PET_HIT_AREA_RULES.find((rule) => isPointInHitRule(position, rule));
+    return matchedRule?.label ?? fallback;
   }
 
   function getAreaLabel(area?: string | null): string {
@@ -527,7 +598,7 @@ window.addEventListener("DOMContentLoaded", () => {
       return "聊天按钮";
     }
 
-    return "文本";
+    return area?.trim() || "文本";
   }
 
   function getSourceLabel(source?: string | null): string {
@@ -723,7 +794,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     floatingTextInput.value = "";
     closeFloatingInput();
-    await runLlmInteraction("shortcut", undefined, undefined, text);
+    await runLlmInteraction("shortcut", "悬浮输入框", undefined, text);
   }
 
   async function applyScale(nextScale: number, options: ApplyScaleOptions = {}): Promise<void> {
@@ -867,7 +938,7 @@ window.addEventListener("DOMContentLoaded", () => {
     burst("*", 46, 18);
 
     if (state.llmInteractionMode) {
-      void runLlmInteraction("click", "head", event);
+      void runLlmInteraction("click", resolvePetHitArea(event, "头部"), event);
       updateStatus();
       return;
     }
@@ -889,7 +960,7 @@ window.addEventListener("DOMContentLoaded", () => {
     burst("+", 52, 38);
 
     if (state.llmInteractionMode) {
-      void runLlmInteraction("click", "body", event);
+      void runLlmInteraction("click", resolvePetHitArea(event, "身体"), event);
       updateStatus();
       return;
     }
@@ -1083,7 +1154,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   chatButton.addEventListener("click", () => {
     if (state.llmInteractionMode) {
-      void runLlmInteraction("button", "chat", undefined, "用户点击了聊天按钮。");
+      void runLlmInteraction("button", "聊天按钮", undefined, "用户点击了聊天按钮。");
       return;
     }
 

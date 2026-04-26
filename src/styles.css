@@ -614,18 +614,20 @@ button {
 
 .hitbox--head {
   top: 8%;
-  left: 19%;
-  width: 62%;
-  height: 31%;
+  left: 8%;
+  width: 84%;
+  height: 48%;
   border-radius: 50% 50% 44% 44%;
+  z-index: 7;
 }
 
 .hitbox--body {
-  top: 41%;
-  left: 17%;
-  width: 66%;
-  height: 40%;
+  top: 51%;
+  left: 0;
+  width: 100%;
+  height: 49%;
   border-radius: 28% 28% 22% 22%;
+  z-index: 6;
 }
 
 .drag-chip {

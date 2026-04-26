@@ -156,8 +156,14 @@ struct OpenAiCompatibleChatResponse {
 
 #[derive(Debug, Deserialize)]
 struct OpenAiCompatibleChoice {
-    message: LlmMessage,
+    message: OpenAiCompatibleMessage,
     finish_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiCompatibleMessage {
+    content: Option<serde_json::Value>,
+    text: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -443,6 +449,41 @@ fn clean_model_text(text: &str) -> String {
         .collect::<String>()
 }
 
+fn content_value_to_text(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => text.clone(),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .map(content_value_to_text)
+            .filter(|text| !text.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join(" "),
+        serde_json::Value::Object(map) => map
+            .get("text")
+            .or_else(|| map.get("content"))
+            .map(content_value_to_text)
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+fn extract_message_text(message: &OpenAiCompatibleMessage) -> String {
+    for value in [
+        message.content.as_ref(),
+        message.text.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let content = clean_model_text(&content_value_to_text(value));
+        if !content.is_empty() {
+            return content;
+        }
+    }
+
+    String::new()
+}
+
 fn format_history_for_prompt(history: &[InteractionRecord]) -> String {
     if history.is_empty() {
         return "暂无历史。".to_string();
@@ -604,7 +645,7 @@ async fn llm_pet_interact(
                 messages: &messages,
                 stream: false,
                 temperature: Some(0.82),
-                max_tokens: Some(90),
+                max_tokens: Some(180),
             };
 
             match client
@@ -619,16 +660,21 @@ async fn llm_pet_interact(
                     match response.text().await {
                         Ok(body) if status.is_success() => {
                             match serde_json::from_str::<OpenAiCompatibleChatResponse>(&body) {
-                                Ok(parsed) => parsed
-                                    .choices
-                                    .into_iter()
-                                    .next()
-                                    .map(|choice| {
+                                Ok(parsed) => {
+                                    let content = parsed
+                                        .choices
+                                        .into_iter()
+                                        .next()
+                                        .map(|choice| extract_message_text(&choice.message))
+                                        .unwrap_or_default();
+
+                                    if content.is_empty() {
+                                        "我刚刚听见了，但外脑没吐出一句完整的话。".to_string()
+                                    } else {
                                         llm_used = true;
-                                        clean_model_text(&choice.message.content)
-                                    })
-                                    .filter(|content| !content.is_empty())
-                                    .unwrap_or_else(|| "我刚刚听见了，但外脑没吐出一句完整的话。".to_string()),
+                                        content
+                                    }
+                                }
                                 Err(_) => "外脑回信格式怪怪的，我先眨眨眼。".to_string(),
                             }
                         }
@@ -711,7 +757,7 @@ async fn llm_chat(app: AppHandle, request: LlmChatRequest) -> Result<LlmChatResp
         .into_iter()
         .next()
         .ok_or_else(|| "LLM API 响应里没有 choices。".to_string())?;
-    let content = choice.message.content.trim().to_string();
+    let content = extract_message_text(&choice.message);
 
     if content.is_empty() {
         return Err("LLM API 返回了空内容。".to_string());
@@ -782,7 +828,7 @@ async fn llm_chat_from_env(request: LlmChatRequest) -> Result<LlmChatResponse, S
         .into_iter()
         .next()
         .ok_or_else(|| "LLM API 响应里没有 choices。".to_string())?;
-    let content = choice.message.content.trim().to_string();
+    let content = extract_message_text(&choice.message);
 
     if content.is_empty() {
         return Err("LLM API 返回了空内容。".to_string());
