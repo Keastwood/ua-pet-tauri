@@ -109,7 +109,9 @@ interface InteractionTool {
 }
 
 const BASE_WINDOW_WIDTH = 430;
-const BASE_WINDOW_HEIGHT = 940;
+const BASE_WINDOW_HEIGHT = 1080;
+const PET_ASSET_WIDTH = 1170;
+const PET_ASSET_HEIGHT = 2532;
 const MIN_SCALE = 0.75;
 const MAX_SCALE = 1.35;
 const SCALE_STEP = 0.05;
@@ -133,11 +135,11 @@ const INTERACTION_TOOLS: InteractionTool[] = [
 const PET_HIT_AREA_RULES: PetHitAreaRule[] = [
   { label: "嘴巴", shape: "ellipse", x: 43.5, y: 47.2, width: 14, height: 5.4 },
   { label: "鼻尖", shape: "ellipse", x: 47.7, y: 43.7, width: 5.4, height: 5.8 },
-  { label: "左眼", shape: "ellipse", x: 29.2, y: 36.5, width: 17.4, height: 8.6 },
-  { label: "右眼", shape: "ellipse", x: 53.8, y: 36.5, width: 17.4, height: 8.6 },
+  { label: "左脸颊", shape: "ellipse", x: 27.5, y: 42.2, width: 16, height: 10.5 },
+  { label: "右脸颊", shape: "ellipse", x: 56.5, y: 42.2, width: 16, height: 10.5 },
+  { label: "左眼", shape: "ellipse", x: 29.2, y: 36.2, width: 17.4, height: 7.2 },
+  { label: "右眼", shape: "ellipse", x: 53.8, y: 36.2, width: 17.4, height: 7.2 },
   { label: "眼镜", shape: "rect", x: 27, y: 34.8, width: 47, height: 12.8 },
-  { label: "左脸颊", shape: "ellipse", x: 27.5, y: 43.5, width: 16, height: 8.8 },
-  { label: "右脸颊", shape: "ellipse", x: 56.5, y: 43.5, width: 16, height: 8.8 },
   { label: "脸", shape: "ellipse", x: 28.5, y: 31.2, width: 43, height: 26 },
   { label: "呆毛", shape: "ellipse", x: 44.8, y: 8.4, width: 12.8, height: 14.8 },
   { label: "头顶", shape: "ellipse", x: 27, y: 17, width: 46, height: 17 },
@@ -615,10 +617,14 @@ window.addEventListener("DOMContentLoaded", () => {
       return {};
     }
 
-    const imageRect = baseLayer.getBoundingClientRect();
-    const rect = imageRect.width > 0 && imageRect.height > 0 ? imageRect : petRoot.getBoundingClientRect();
-    const xPercent = Math.min(100, Math.max(0, ((event.clientX - rect.left) / rect.width) * 100));
-    const yPercent = Math.min(100, Math.max(0, ((event.clientY - rect.top) / rect.height) * 100));
+    const petRect = petRoot.getBoundingClientRect();
+    const renderedImageWidth = petRect.width;
+    const renderedImageHeight = renderedImageWidth * (PET_ASSET_HEIGHT / PET_ASSET_WIDTH);
+    const imageLeft = petRect.left;
+    const imageTop = petRect.bottom - renderedImageHeight;
+
+    const xPercent = Math.min(100, Math.max(0, ((event.clientX - imageLeft) / renderedImageWidth) * 100));
+    const yPercent = Math.min(100, Math.max(0, ((event.clientY - imageTop) / renderedImageHeight) * 100));
     return {
       xPercent: Number(xPercent.toFixed(1)),
       yPercent: Number(yPercent.toFixed(1)),
