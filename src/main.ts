@@ -100,7 +100,7 @@ interface InteractionTool {
 }
 
 const BASE_WINDOW_WIDTH = 430;
-const BASE_WINDOW_HEIGHT = 860;
+const BASE_WINDOW_HEIGHT = 940;
 const MIN_SCALE = 0.75;
 const MAX_SCALE = 1.35;
 const SCALE_STEP = 0.05;
