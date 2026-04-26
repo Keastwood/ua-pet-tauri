@@ -1128,3 +1128,212 @@ button {
     transform: translate(-50%, -56px) scale(1.1);
   }
 }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.settings-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 5px;
+  border: 1px solid rgba(94, 145, 180, 0.2);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.46);
+}
+
+.settings-tab-btn {
+  border: 0;
+  border-radius: 13px;
+  padding: 9px 10px;
+  color: rgba(38, 83, 116, 0.78);
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.settings-tab-btn[aria-selected="true"] {
+  color: white;
+  background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+  box-shadow: 0 10px 20px rgba(47, 109, 150, 0.18);
+}
+
+.settings-section[hidden] {
+  display: none;
+}
+
+.settings-subcard {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  border: 1px solid rgba(102, 154, 189, 0.18);
+  border-radius: 22px;
+  padding: 13px;
+  background: rgba(255, 255, 255, 0.48);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.74);
+}
+
+.settings-subcard h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.settings-readout {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.settings-readout span {
+  border: 1px solid rgba(100, 149, 182, 0.2);
+  border-radius: 16px;
+  padding: 9px 10px;
+  color: rgba(44, 88, 120, 0.78);
+  background: rgba(255, 255, 255, 0.54);
+  font-size: 12px;
+}
+
+.settings-readout strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--ink);
+}
+
+.settings-actions--spread {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.skin-importer--settings {
+  margin: 0;
+  padding: 0;
+  border-top: 0;
+}
+
+.skin-delete-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.settings-hint {
+  margin: 0;
+  color: rgba(24, 54, 75, 0.62);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.side-dock {
+  top: auto;
+  right: 0;
+  bottom: 36px;
+  width: 46px;
+  max-width: 46px;
+  gap: 6px;
+  justify-items: center;
+}
+
+.side-dock .interaction-tools,
+.side-dock .skin-switcher,
+.side-dock .quick-panel {
+  width: 44px;
+  min-width: 44px;
+  max-width: 44px;
+  padding: 5px;
+  border-radius: 18px;
+}
+
+.side-dock .interaction-tools__buttons,
+.side-dock .skin-switcher__buttons,
+.side-dock .control-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 5px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+}
+
+.side-dock .skin-switcher__buttons {
+  max-height: 172px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.side-dock .skin-switcher__buttons::-webkit-scrollbar {
+  display: none;
+}
+
+.side-dock .interaction-tool-btn,
+.side-dock .control-btn,
+.side-dock .skin-switcher__btn {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  padding: 0;
+  border-radius: 14px;
+  font-size: 0;
+}
+
+.side-dock .interaction-tool-btn::before,
+.side-dock .control-btn::before {
+  content: attr(data-icon);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.side-dock .skin-switcher__btn {
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.82), rgba(223, 241, 249, 0.72)),
+    rgba(255, 255, 255, 0.65);
+}
+
+.side-dock .skin-switcher__btn img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 18%;
+  pointer-events: none;
+}
+
+.side-dock .skin-switcher__btn[aria-pressed="true"] {
+  border-color: rgba(51, 105, 140, 0.68);
+  box-shadow:
+    0 0 0 2px rgba(108, 182, 216, 0.36),
+    0 12px 24px rgba(47, 109, 150, 0.2);
+}
+
+.side-dock .quick-panel .control-row {
+  grid-template-columns: 1fr;
+}
+
+.side-dock .control-btn {
+  color: var(--ink);
+}
+
+.side-dock .control-btn[data-icon="聊"]::before {
+  font-size: 13px;
+}
+
+.side-dock .interaction-tools__copy,
+.side-dock .dock-summary,
+.side-dock .status-row,
+.side-dock .skin-importer {
+  display: none;
+}

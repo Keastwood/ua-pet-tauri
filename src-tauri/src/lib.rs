@@ -1386,6 +1386,26 @@ fn save_custom_skin(app: AppHandle, request: SaveCustomSkinRequest) -> Result<Cu
 }
 
 #[tauri::command]
+fn delete_custom_skin(app: AppHandle, id: String) -> Result<(), String> {
+    let clean_id = sanitize_skin_id(&id);
+    if clean_id != id {
+        return Err("皮肤 ID 无效。".to_string());
+    }
+
+    let root = custom_skins_dir(&app)?;
+    let skin_dir = root.join(&clean_id);
+    if !skin_dir.exists() {
+        return Ok(());
+    }
+
+    if !skin_dir.is_dir() {
+        return Err("皮肤路径不是目录，已取消删除。".to_string());
+    }
+
+    fs::remove_dir_all(&skin_dir).map_err(|error| format!("删除皮肤失败：{error}"))
+}
+
+#[tauri::command]
 fn move_pet_window(window: Window, x: f64, y: f64) -> Result<(), String> {
     window
         .set_position(Position::Logical(LogicalPosition::new(x, y)))
@@ -1458,6 +1478,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             clear_interaction_history,
+            delete_custom_skin,
             get_llm_config,
             get_interaction_history,
             list_custom_skins,

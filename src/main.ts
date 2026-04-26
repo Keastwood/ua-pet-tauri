@@ -396,6 +396,8 @@ window.addEventListener("DOMContentLoaded", () => {
   const settingsCloseButton = must<HTMLButtonElement>("#settings-close-btn");
   const settingsSaveButton = must<HTMLButtonElement>("#settings-save-btn");
   const settingsTestButton = must<HTMLButtonElement>("#settings-test-btn");
+  const settingsTabButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".settings-tab-btn[data-settings-tab]"));
+  const settingsSections = Array.from(document.querySelectorAll<HTMLElement>(".settings-section[data-settings-section]"));
   const llmApiKeyInput = must<HTMLInputElement>("#llm-api-key-input");
   const llmBaseUrlInput = must<HTMLInputElement>("#llm-base-url-input");
   const llmModelInput = must<HTMLInputElement>("#llm-model-input");
@@ -427,6 +429,8 @@ window.addEventListener("DOMContentLoaded", () => {
   const skinTransparentInput = must<HTMLInputElement>("#skin-transparent-input");
   const skinAddButton = must<HTMLButtonElement>("#skin-add-btn");
   const skinImportStatus = must<HTMLParagraphElement>("#skin-import-status");
+  const skinDeleteSelect = must<HTMLSelectElement>("#skin-delete-select");
+  const skinDeleteButton = must<HTMLButtonElement>("#skin-delete-btn");
   const fxLayer = must<HTMLDivElement>("#fx-layer");
   const baseLayer = must<HTMLImageElement>("#base-layer");
   const blinkLayer = must<HTMLImageElement>("#blink-layer");
@@ -479,13 +483,45 @@ window.addEventListener("DOMContentLoaded", () => {
       button.className = "skin-switcher__btn";
       button.type = "button";
       button.dataset.skin = skin.id;
-      button.textContent = skin.name;
+      button.title = skin.name;
+      button.setAttribute("aria-label", `切换皮肤：${skin.name}`);
       button.setAttribute("aria-pressed", String(skin.id === state.selectedSkinId));
+
+      const thumbnail = document.createElement("img");
+      thumbnail.src = skin.images.idle;
+      thumbnail.alt = "";
+      thumbnail.loading = "lazy";
+      button.appendChild(thumbnail);
+
       button.addEventListener("click", () => {
         setPetSkin(skin.id, { announce: true });
       });
       skinButtons.appendChild(button);
     }
+
+    renderCustomSkinDeleteOptions();
+  }
+
+  function renderCustomSkinDeleteOptions(): void {
+    skinDeleteSelect.replaceChildren();
+
+    if (customPetSkins.length === 0) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "没有可删除的自定义皮肤";
+      skinDeleteSelect.appendChild(option);
+      skinDeleteButton.disabled = true;
+      return;
+    }
+
+    for (const skin of customPetSkins) {
+      const option = document.createElement("option");
+      option.value = skin.id;
+      option.textContent = skin.name;
+      skinDeleteSelect.appendChild(option);
+    }
+
+    skinDeleteButton.disabled = false;
   }
 
   function updateStatus(): void {
@@ -500,11 +536,17 @@ window.addEventListener("DOMContentLoaded", () => {
       moodValue.textContent = "待机";
     }
 
-    pinButton.textContent = state.alwaysOnTop ? "取消置顶" : "重新置顶";
+    pinButton.textContent = "置顶";
+    pinButton.dataset.icon = state.alwaysOnTop ? "顶" : "低";
+    pinButton.title = state.alwaysOnTop ? "取消置顶" : "重新置顶";
+    pinButton.setAttribute("aria-label", pinButton.title);
     pinButton.setAttribute("aria-pressed", String(state.alwaysOnTop));
     sceneButton.textContent = state.sceneMode ? "透明" : "背景";
+    sceneButton.dataset.icon = state.sceneMode ? "透" : "景";
+    sceneButton.title = state.sceneMode ? "切回透明模式" : "开启背景模式";
+    sceneButton.setAttribute("aria-label", sceneButton.title);
     sceneButton.setAttribute("aria-pressed", String(state.sceneMode));
-    llmModeButton.textContent = state.llmInteractionMode ? "LLM" : "本地";
+    llmModeButton.textContent = state.llmInteractionMode ? "LLM 互动" : "本地互动";
     llmModeButton.setAttribute("aria-pressed", String(state.llmInteractionMode));
 
     const selectedTool = getInteractionTool(state.selectedInteractionTool);
@@ -744,6 +786,38 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  async function deleteSelectedCustomSkin(): Promise<void> {
+    const skinId = skinDeleteSelect.value;
+    if (!skinId) {
+      setSkinImportStatus("没有选中的自定义皮肤。");
+      return;
+    }
+
+    const skin = customPetSkins.find((item) => item.id === skinId);
+    const skinName = skin?.name ?? skinId;
+
+    try {
+      skinDeleteButton.disabled = true;
+      await invoke("delete_custom_skin", { id: skinId });
+      customPetSkins = customPetSkins.filter((item) => item.id !== skinId);
+      syncAvailablePetSkins();
+      renderSkinButtons();
+
+      if (state.selectedSkinId === skinId) {
+        setPetSkin(DEFAULT_PET_SKIN_ID, { announce: true });
+      } else {
+        updateStatus();
+      }
+
+      setSkinImportStatus(`已删除 ${skinName}。`);
+    } catch (error) {
+      console.error(error);
+      setSkinImportStatus(`删除失败：${String(error)}`);
+    } finally {
+      renderCustomSkinDeleteOptions();
+    }
+  }
+
   function setSceneMode(enabled: boolean, options: { persist?: boolean; announce?: boolean } = {}): void {
     state.sceneMode = enabled;
     petFrame.dataset.scene = enabled ? "framed" : "transparent";
@@ -899,6 +973,7 @@ window.addEventListener("DOMContentLoaded", () => {
   function openSettings(): void {
     settingsPanel.hidden = false;
     settingsPanel.dataset.show = "true";
+    renderCustomSkinDeleteOptions();
     void loadLlmSettings();
   }
 
@@ -909,6 +984,16 @@ window.addEventListener("DOMContentLoaded", () => {
         settingsPanel.hidden = true;
       }
     }, 180);
+  }
+
+  function setSettingsTab(tab: string): void {
+    for (const button of settingsTabButtons) {
+      button.setAttribute("aria-selected", String(button.dataset.settingsTab === tab));
+    }
+
+    for (const section of settingsSections) {
+      section.hidden = section.dataset.settingsSection !== tab;
+    }
   }
 
   function clampTimeoutSeconds(value: number): number {
@@ -1641,6 +1726,12 @@ window.addEventListener("DOMContentLoaded", () => {
     closeSettings();
   });
 
+  for (const button of settingsTabButtons) {
+    button.addEventListener("click", () => {
+      setSettingsTab(button.dataset.settingsTab ?? "llm");
+    });
+  }
+
   settingsForm.addEventListener("submit", (event) => {
     event.preventDefault();
     void saveLlmSettings();
@@ -1687,6 +1778,10 @@ window.addEventListener("DOMContentLoaded", () => {
     if (file) {
       void importCustomSkinFile(file);
     }
+  });
+
+  skinDeleteButton.addEventListener("click", () => {
+    void deleteSelectedCustomSkin();
   });
 
   floatingInput.addEventListener("submit", (event) => {
@@ -1790,6 +1885,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   renderSkinButtons();
+  setSettingsTab("llm");
   updateStatus();
   bubble.dataset.show = "false";
   blinkLayer.hidden = true;
