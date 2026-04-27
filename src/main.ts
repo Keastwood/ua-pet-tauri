@@ -468,7 +468,20 @@ function clampVoiceSensitivity(value: number): number {
 }
 
 function getVoiceConfidenceThreshold(sensitivity: number): number {
-  return Math.max(0.25, Math.min(0.85, 0.92 - clampVoiceSensitivity(sensitivity) * 0.067));
+  return Math.max(0.05, Math.min(0.65, 0.72 - clampVoiceSensitivity(sensitivity) * 0.067));
+}
+
+function shouldAcceptVoiceTranscript(transcript: string, confidence: number, sensitivity: number): boolean {
+  const normalized = transcript.replace(/\s+/g, "");
+  if (normalized.length >= 2 && clampVoiceSensitivity(sensitivity) >= 6) {
+    return true;
+  }
+
+  if (normalized.length >= 4 && confidence >= 0.01) {
+    return true;
+  }
+
+  return confidence >= getVoiceConfidenceThreshold(sensitivity);
 }
 
 function customSkinViewToDefinition(skin: CustomSkinView): PetSkinDefinition {
@@ -1244,7 +1257,7 @@ window.addEventListener("DOMContentLoaded", () => {
     voiceEnabledInput.disabled = false;
     voiceTestButton.disabled = false;
     if (!state.voiceEnabled) {
-      setVoiceStatus(`语音识别未开启。当前灵敏度 ${voiceSensitivity}，置信度阈值约 ${threshold}%。`, "idle");
+      setVoiceStatus(`语音识别未开启。当前灵敏度 ${voiceSensitivity}，短句置信度阈值约 ${threshold}%；较完整文本会优先采用。`, "idle");
     }
   }
 
@@ -1285,13 +1298,16 @@ window.addEventListener("DOMContentLoaded", () => {
         continue;
       }
 
-      if (confidence < getVoiceConfidenceThreshold(voiceSensitivity)) {
-        setVoiceStatus(`听到了“${transcript}”，但置信度偏低，已忽略。可以调高灵敏度。`, "hint");
+      if (!shouldAcceptVoiceTranscript(transcript, confidence, voiceSensitivity)) {
+        setVoiceStatus(
+          `听到了“${transcript}”，但它太短且置信度偏低，已忽略。可以调高灵敏度或说完整一点。`,
+          "hint",
+        );
         setBubble("我听见了一点，但不太确定。", "hint", 1600);
         continue;
       }
 
-      setVoiceStatus(`识别到：${transcript}`, "warm");
+      setVoiceStatus(`识别到：${transcript}（置信度 ${Math.round(confidence * 100)}%）`, "warm");
       void runLlmInteraction("voice", "语音命令", undefined, transcript);
     }
   }
