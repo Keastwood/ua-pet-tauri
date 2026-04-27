@@ -19,6 +19,7 @@ interface PetState {
   scale: number;
   dockedToCorner: boolean;
   sceneMode: boolean;
+  voiceEnabled: boolean;
   bubbleTimeout?: number;
   blinkTimeout?: number;
   blinkHideTimeout?: number;
@@ -140,6 +141,59 @@ interface SaveCustomSkinRequest {
   };
 }
 
+interface SpeechRecognitionAlternativeLike {
+  transcript: string;
+  confidence: number;
+}
+
+interface SpeechRecognitionResultLike {
+  readonly isFinal: boolean;
+  readonly length: number;
+  item(index: number): SpeechRecognitionAlternativeLike;
+  [index: number]: SpeechRecognitionAlternativeLike;
+}
+
+interface SpeechRecognitionResultListLike {
+  readonly length: number;
+  item(index: number): SpeechRecognitionResultLike;
+  [index: number]: SpeechRecognitionResultLike;
+}
+
+interface SpeechRecognitionEventLike extends Event {
+  readonly resultIndex: number;
+  readonly results: SpeechRecognitionResultListLike;
+}
+
+interface SpeechRecognitionErrorEventLike extends Event {
+  readonly error: string;
+  readonly message?: string;
+}
+
+interface SpeechRecognitionLike extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  maxAlternatives: number;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
+  onend: (() => void) | null;
+  onaudiostart: (() => void) | null;
+  onspeechstart: (() => void) | null;
+  onspeechend: (() => void) | null;
+  start(): void;
+  stop(): void;
+  abort(): void;
+}
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+
+declare global {
+  interface Window {
+    SpeechRecognition?: SpeechRecognitionConstructor;
+    webkitSpeechRecognition?: SpeechRecognitionConstructor;
+  }
+}
+
 const BASE_WINDOW_WIDTH = 430;
 const BASE_WINDOW_HEIGHT = 1080;
 const MIN_SCALE = 0.75;
@@ -153,6 +207,9 @@ const PET_SKIN_STORAGE_KEY = "silver-pet.skin.v1";
 const PET_SKIN_PROMPTS_STORAGE_KEY = "silver-pet.skin-prompts.v1";
 const PET_HIDDEN_SKINS_STORAGE_KEY = "silver-pet.hidden-skins.v1";
 const PET_FAVORITE_SKINS_STORAGE_KEY = "silver-pet.favorite-skins.v1";
+const VOICE_ENABLED_STORAGE_KEY = "silver-pet.voice-enabled.v1";
+const VOICE_SENSITIVITY_STORAGE_KEY = "silver-pet.voice-sensitivity.v1";
+const VOICE_LANGUAGE_STORAGE_KEY = "silver-pet.voice-language.v1";
 const MAX_FAVORITE_SKINS = 4;
 const PET_LLM_SYSTEM_PROMPT =
   "你是一个银白发桌宠，会陪用户工作和休息。请用中文回复，语气温柔、俏皮、像桌宠在说话。每次只说一句，控制在 36 个汉字以内，不要解释，不要加引号。";
@@ -255,6 +312,7 @@ const state: PetState = {
   scale: 1,
   dockedToCorner: true,
   sceneMode: false,
+  voiceEnabled: false,
 };
 
 const headLines = [
@@ -397,6 +455,22 @@ function getFavoritePetSkinIds(): string[] {
   return availablePetSkins.slice(0, MAX_FAVORITE_SKINS).map((skin) => skin.id);
 }
 
+function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | null {
+  return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
+}
+
+function clampVoiceSensitivity(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 6;
+  }
+
+  return Math.min(10, Math.max(1, Math.round(value)));
+}
+
+function getVoiceConfidenceThreshold(sensitivity: number): number {
+  return Math.max(0.25, Math.min(0.85, 0.92 - clampVoiceSensitivity(sensitivity) * 0.067));
+}
+
 function customSkinViewToDefinition(skin: CustomSkinView): PetSkinDefinition {
   return {
     id: skin.id,
@@ -506,6 +580,13 @@ window.addEventListener("DOMContentLoaded", () => {
   const llmTimeoutInput = must<HTMLInputElement>("#llm-timeout-input");
   const llmSystemPromptInput = must<HTMLTextAreaElement>("#llm-system-prompt-input");
   const llmClearKeyInput = must<HTMLInputElement>("#llm-clear-key-input");
+  const voiceEnabledInput = must<HTMLInputElement>("#voice-enabled-input");
+  const voiceLanguageSelect = must<HTMLSelectElement>("#voice-language-select");
+  const voiceSensitivityInput = must<HTMLInputElement>("#voice-sensitivity-input");
+  const voiceSensitivityValue = must<HTMLElement>("#voice-sensitivity-value");
+  const voiceStatus = must<HTMLParagraphElement>("#voice-status");
+  const voiceTestButton = must<HTMLButtonElement>("#voice-test-btn");
+  const voiceRestartButton = must<HTMLButtonElement>("#voice-restart-btn");
   const affectionValue = must<HTMLSpanElement>("#affection-value");
   const moodValue = must<HTMLSpanElement>("#mood-value");
   const scaleValue = must<HTMLSpanElement>("#scale-value");
@@ -547,6 +628,12 @@ window.addEventListener("DOMContentLoaded", () => {
   const mouthOLayer = must<HTMLImageElement>("#mouth-o-layer");
   let llmRequestId = 0;
   let activeSkin = findPetSkin(state.selectedSkinId);
+  let voiceRecognition: SpeechRecognitionLike | null = null;
+  let voiceRecognitionId = 0;
+  let voiceRestartTimer: number | undefined;
+  let voiceIntentionalStop = false;
+  let voiceSensitivity = clampVoiceSensitivity(Number(localStorage.getItem(VOICE_SENSITIVITY_STORAGE_KEY) ?? "6"));
+  let voiceLanguage = localStorage.getItem(VOICE_LANGUAGE_STORAGE_KEY) || "zh-CN";
   const quickActionIcons = {
     chat:
       '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.2 17.2 4 21l4.7-1.4c1 .4 2.1.6 3.3.6 5 0 9-3.3 9-7.4s-4-7.4-9-7.4-9 3.3-9 7.4c0 1.7.7 3.3 1.9 4.4Z"/><path d="M8 11.2h8M8 14h5.6"/></svg>',
@@ -1133,6 +1220,207 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function setVoiceStatus(text: string, tone: Tone | "idle" = "idle"): void {
+    voiceStatus.textContent = text;
+    voiceStatus.dataset.tone = tone;
+  }
+
+  function syncVoiceControls(): void {
+    voiceEnabledInput.checked = state.voiceEnabled;
+    voiceLanguageSelect.value = voiceLanguage;
+    voiceSensitivityInput.value = String(voiceSensitivity);
+    voiceSensitivityValue.textContent = String(voiceSensitivity);
+    const threshold = Math.round(getVoiceConfidenceThreshold(voiceSensitivity) * 100);
+    voiceRestartButton.disabled = !state.voiceEnabled;
+
+    if (!getSpeechRecognitionConstructor()) {
+      voiceEnabledInput.disabled = true;
+      voiceTestButton.disabled = true;
+      voiceRestartButton.disabled = true;
+      setVoiceStatus("当前 WebView 不支持系统语音识别。可以更新 WebView2，或之后接入外部 STT API。", "alert");
+      return;
+    }
+
+    voiceEnabledInput.disabled = false;
+    voiceTestButton.disabled = false;
+    if (!state.voiceEnabled) {
+      setVoiceStatus(`语音识别未开启。当前灵敏度 ${voiceSensitivity}，置信度阈值约 ${threshold}%。`, "idle");
+    }
+  }
+
+  function stopVoiceRecognition(options: { persist?: boolean; announce?: boolean } = {}): void {
+    state.voiceEnabled = false;
+    voiceIntentionalStop = true;
+    voiceRecognitionId += 1;
+    clearTimer(voiceRestartTimer);
+    voiceRestartTimer = undefined;
+
+    if (options.persist ?? true) {
+      localStorage.setItem(VOICE_ENABLED_STORAGE_KEY, "0");
+    }
+
+    try {
+      voiceRecognition?.stop();
+    } catch (error) {
+      console.warn("Failed to stop voice recognition:", error);
+    }
+
+    syncVoiceControls();
+    if (options.announce) {
+      setBubble("语音监听已关闭。", "hint", 1400);
+    }
+  }
+
+  function handleVoiceResult(event: SpeechRecognitionEventLike): void {
+    for (let index = event.resultIndex; index < event.results.length; index += 1) {
+      const result = event.results.item(index);
+      if (!result.isFinal || result.length === 0) {
+        continue;
+      }
+
+      const alternative = result.item(0);
+      const transcript = alternative.transcript.trim();
+      const confidence = Number.isFinite(alternative.confidence) ? alternative.confidence : 1;
+      if (!transcript) {
+        continue;
+      }
+
+      if (confidence < getVoiceConfidenceThreshold(voiceSensitivity)) {
+        setVoiceStatus(`听到了“${transcript}”，但置信度偏低，已忽略。可以调高灵敏度。`, "hint");
+        setBubble("我听见了一点，但不太确定。", "hint", 1600);
+        continue;
+      }
+
+      setVoiceStatus(`识别到：${transcript}`, "warm");
+      void runLlmInteraction("voice", "语音命令", undefined, transcript);
+    }
+  }
+
+  function createVoiceRecognition(recognitionId: number): SpeechRecognitionLike | null {
+    const Recognition = getSpeechRecognitionConstructor();
+    if (!Recognition) {
+      return null;
+    }
+
+    const recognition = new Recognition();
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.lang = voiceLanguage;
+    recognition.onaudiostart = () => {
+      setVoiceStatus("麦克风已连接，正在听语音命令。", "warm");
+    };
+    recognition.onspeechstart = () => {
+      setVoiceStatus("听到声音了，正在识别...", "warm");
+    };
+    recognition.onspeechend = () => {
+      setVoiceStatus("一句话结束了，等待识别结果...", "idle");
+    };
+    recognition.onresult = (event) => {
+      if (recognitionId === voiceRecognitionId) {
+        handleVoiceResult(event);
+      }
+    };
+    recognition.onerror = (event) => {
+      if (recognitionId !== voiceRecognitionId) {
+        return;
+      }
+
+      const message =
+        event.error === "not-allowed"
+          ? "麦克风权限被拒绝，请在系统或 WebView 权限里允许麦克风。"
+          : `语音识别出错：${event.error}${event.message ? `，${event.message}` : ""}`;
+      setVoiceStatus(message, "alert");
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+        stopVoiceRecognition({ announce: true });
+      }
+    };
+    recognition.onend = () => {
+      if (recognitionId !== voiceRecognitionId) {
+        return;
+      }
+
+      voiceRecognition = null;
+      if (!state.voiceEnabled || voiceIntentionalStop) {
+        return;
+      }
+
+      setVoiceStatus("语音监听短暂断开，正在自动重连...", "idle");
+      voiceRestartTimer = window.setTimeout(() => {
+        void startVoiceRecognition({ announce: false });
+      }, 700);
+    };
+
+    return recognition;
+  }
+
+  async function requestMicrophonePermission(): Promise<void> {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      return;
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    for (const track of stream.getTracks()) {
+      track.stop();
+    }
+  }
+
+  async function startVoiceRecognition(options: { persist?: boolean; announce?: boolean } = {}): Promise<void> {
+    if (!getSpeechRecognitionConstructor()) {
+      syncVoiceControls();
+      setBubble("当前环境不支持语音识别。", "alert", 2200);
+      return;
+    }
+
+    state.voiceEnabled = true;
+    voiceIntentionalStop = false;
+    clearTimer(voiceRestartTimer);
+    voiceRestartTimer = undefined;
+
+    if (options.persist ?? true) {
+      localStorage.setItem(VOICE_ENABLED_STORAGE_KEY, "1");
+    }
+
+    try {
+      await requestMicrophonePermission();
+      const previousRecognition = voiceRecognition;
+      const recognitionId = ++voiceRecognitionId;
+      previousRecognition?.abort();
+      voiceRecognition = createVoiceRecognition(recognitionId);
+      voiceRecognition?.start();
+      syncVoiceControls();
+      setVoiceStatus("语音监听已开启，说话会自动交给 LLM 互动。", "warm");
+      if (options.announce) {
+        setBubble("语音监听开启啦，你可以直接说命令。", "hint", 1900);
+      }
+    } catch (error) {
+      console.error(error);
+      state.voiceEnabled = false;
+      localStorage.setItem(VOICE_ENABLED_STORAGE_KEY, "0");
+      syncVoiceControls();
+      setVoiceStatus(`麦克风启动失败：${String(error)}`, "alert");
+      setBubble("麦克风没有接上，检查一下权限。", "alert", 2200);
+    }
+  }
+
+  function restartVoiceRecognition(): void {
+    if (!state.voiceEnabled) {
+      return;
+    }
+
+    voiceIntentionalStop = true;
+    voiceRecognitionId += 1;
+    try {
+      voiceRecognition?.abort();
+    } catch (error) {
+      console.warn("Failed to restart voice recognition:", error);
+    }
+    voiceRecognition = null;
+    window.setTimeout(() => {
+      void startVoiceRecognition({ persist: false, announce: false });
+    }, 180);
+  }
+
   function setInteractionTool(toolId: string | null | undefined, options: { persist?: boolean; announce?: boolean } = {}): void {
     const tool = getInteractionTool(toolId);
     state.selectedInteractionTool = tool.id;
@@ -1280,6 +1568,7 @@ window.addEventListener("DOMContentLoaded", () => {
     settingsPanel.dataset.show = "true";
     renderSkinPromptOptions();
     renderSkinDeleteOptions();
+    syncVoiceControls();
     void loadLlmSettings();
   }
 
@@ -1455,6 +1744,10 @@ window.addEventListener("DOMContentLoaded", () => {
 
     if (source === "button") {
       return "按钮互动";
+    }
+
+    if (source === "voice") {
+      return "语音命令";
     }
 
     return source ?? "未知来源";
@@ -2069,6 +2362,44 @@ window.addEventListener("DOMContentLoaded", () => {
     void testLlmSettings();
   });
 
+  voiceEnabledInput.addEventListener("change", () => {
+    if (voiceEnabledInput.checked) {
+      void startVoiceRecognition({ announce: true });
+    } else {
+      stopVoiceRecognition({ announce: true });
+    }
+  });
+
+  voiceLanguageSelect.addEventListener("change", () => {
+    voiceLanguage = voiceLanguageSelect.value || "zh-CN";
+    localStorage.setItem(VOICE_LANGUAGE_STORAGE_KEY, voiceLanguage);
+    setVoiceStatus(`识别语言已切换为 ${voiceLanguage}。`, "idle");
+    restartVoiceRecognition();
+  });
+
+  voiceSensitivityInput.addEventListener("input", () => {
+    voiceSensitivity = clampVoiceSensitivity(Number(voiceSensitivityInput.value));
+    localStorage.setItem(VOICE_SENSITIVITY_STORAGE_KEY, String(voiceSensitivity));
+    syncVoiceControls();
+  });
+
+  voiceTestButton.addEventListener("click", () => {
+    void requestMicrophonePermission()
+      .then(() => {
+        setVoiceStatus("麦克风权限正常，可以开启语音命令。", "warm");
+        setBubble("麦克风能听见啦。", "hint", 1500);
+      })
+      .catch((error) => {
+        console.error(error);
+        setVoiceStatus(`麦克风测试失败：${String(error)}`, "alert");
+      });
+  });
+
+  voiceRestartButton.addEventListener("click", () => {
+    restartVoiceRecognition();
+    setVoiceStatus("正在重启语音监听...", "idle");
+  });
+
   historyButton.addEventListener("click", () => {
     openHistory();
   });
@@ -2242,11 +2573,17 @@ window.addEventListener("DOMContentLoaded", () => {
   const savedSceneMode = localStorage.getItem(SCENE_MODE_STORAGE_KEY) === "1";
   const savedInteractionTool = localStorage.getItem(INTERACTION_TOOL_STORAGE_KEY);
   const savedSkin = localStorage.getItem(PET_SKIN_STORAGE_KEY);
+  const savedVoiceEnabled = localStorage.getItem(VOICE_ENABLED_STORAGE_KEY) === "1";
 
   setPetSkin(savedSkin, { persist: false });
   setSceneMode(savedSceneMode, { persist: false });
   setLlmInteractionMode(savedLlmInteractionMode, { persist: false });
   setInteractionTool(savedInteractionTool, { persist: false });
+  state.voiceEnabled = savedVoiceEnabled;
+  syncVoiceControls();
+  if (savedVoiceEnabled) {
+    void startVoiceRecognition({ persist: false, announce: false });
+  }
   void applyScale(savedScale, { persist: false, showBubble: false, ensureDocked: true });
   void loadCustomPetSkins(savedSkin);
 

@@ -294,6 +294,7 @@ button {
 }
 
 .settings-field input,
+.settings-field select,
 .settings-field textarea {
   width: 100%;
   border: 1px solid rgba(98, 149, 184, 0.26);
@@ -312,6 +313,7 @@ button {
 }
 
 .settings-field input:focus,
+.settings-field select:focus,
 .settings-field textarea:focus {
   border-color: rgba(72, 128, 166, 0.56);
   box-shadow:
@@ -331,6 +333,13 @@ button {
   width: 16px;
   height: 16px;
   accent-color: var(--accent-deep);
+}
+
+.settings-field input[type="range"] {
+  padding: 0;
+  accent-color: var(--accent-deep);
+  background: transparent;
+  box-shadow: none;
 }
 
 .settings-status {
@@ -1159,7 +1168,7 @@ button {
 
 .settings-tabs {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
   margin: 0 0 14px;
   padding: 5px;
