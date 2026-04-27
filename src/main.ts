@@ -196,6 +196,7 @@ declare global {
 
 const BASE_WINDOW_WIDTH = 430;
 const BASE_WINDOW_HEIGHT = 1080;
+const PET_VISUAL_WIDTH = 350;
 const MIN_SCALE = 0.75;
 const MAX_SCALE = 1.35;
 const SCALE_STEP = 0.05;
@@ -688,10 +689,18 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function applySkinVisuals(skin: PetSkinDefinition): void {
+    const visualHeight = (PET_VISUAL_WIDTH * skin.assetHeight) / skin.assetWidth;
+    const frameHeadroom = Math.min(142, Math.max(72, visualHeight * 0.16));
+    const frameHeight = visualHeight + frameHeadroom;
+    const stageHeight = frameHeight + 138;
+
     activeSkin = skin;
     petRoot.dataset.skinLayout = skin.layout;
     petRoot.style.setProperty("--pet-aspect-height", String(skin.assetHeight / skin.assetWidth));
-    petRoot.style.setProperty("--pet-visual-height", `${(350 * skin.assetHeight) / skin.assetWidth}px`);
+    petRoot.style.setProperty("--pet-visual-width", `${PET_VISUAL_WIDTH}px`);
+    petRoot.style.setProperty("--pet-visual-height", `${visualHeight}px`);
+    petFrame.style.setProperty("--pet-frame-height", `${frameHeight}px`);
+    petStage.style.setProperty("--pet-stage-height", `${stageHeight}px`);
     petRoot.style.setProperty("--mouth-mask-x", skin.layout === "fullBody" ? "51%" : "50.4%");
     petRoot.style.setProperty("--mouth-mask-y", skin.layout === "fullBody" ? "37.4%" : "42.7%");
     petRoot.style.setProperty("--mouth-mask-width", skin.layout === "fullBody" ? "8.8%" : "9.8%");
