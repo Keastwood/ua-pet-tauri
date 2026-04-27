@@ -612,7 +612,7 @@ button {
   position: relative;
   width: 100%;
   max-width: 410px;
-  min-height: var(--pet-stage-height, 1038px);
+  min-height: 960px;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
@@ -622,7 +622,7 @@ button {
 .pet-frame {
   position: relative;
   width: 100%;
-  height: var(--pet-frame-height, 900px);
+  height: 758px;
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -631,19 +631,19 @@ button {
 
 .pet::before,
 .pet::after {
+  box-sizing: border-box;
   content: "";
   position: absolute;
+  inset: 0;
   pointer-events: none;
   opacity: 0;
-  transform: translateY(8px) scale(0.98);
-  transition: opacity 220ms ease, transform 220ms ease;
+  transition: opacity 220ms ease;
 }
 
 .pet::before {
   z-index: 0;
-  inset: -28px -22px 4px;
   border: 1px solid rgba(115, 166, 199, 0.34);
-  border-radius: 38px;
+  border-radius: 30px;
   background:
     radial-gradient(circle at 50% 16%, rgba(255, 255, 255, 0.98), rgba(255, 255, 255, 0) 31%),
     radial-gradient(circle at 16% 74%, rgba(134, 195, 226, 0.34), rgba(134, 195, 226, 0) 34%),
@@ -657,7 +657,6 @@ button {
 
 .pet::after {
   z-index: 0;
-  inset: -12px -6px 24px;
   border-radius: 30px;
   border: 1px solid rgba(255, 255, 255, 0.66);
   background:
@@ -675,7 +674,6 @@ button {
 .pet-frame[data-scene="framed"] .pet::before,
 .pet-frame[data-scene="framed"] .pet::after {
   opacity: 1;
-  transform: translateY(0) scale(1);
 }
 
 .pet-shadow {
@@ -1109,12 +1107,12 @@ button {
 }
 
 .pet-stage {
-  min-height: var(--pet-stage-height, 1038px);
+  min-height: 1038px;
   justify-content: center;
 }
 
 .pet-frame {
-  height: var(--pet-frame-height, 900px);
+  height: 900px;
 }
 
 .note {

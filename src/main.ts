@@ -701,18 +701,11 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function applySkinVisuals(skin: PetSkinDefinition): void {
-    const visualHeight = (PET_VISUAL_WIDTH * skin.assetHeight) / skin.assetWidth;
-    const frameHeadroom = Math.min(142, Math.max(72, visualHeight * 0.16));
-    const frameHeight = visualHeight + frameHeadroom;
-    const stageHeight = frameHeight + 138;
-
     activeSkin = skin;
     petRoot.dataset.skinLayout = skin.layout;
     petRoot.style.setProperty("--pet-aspect-height", String(skin.assetHeight / skin.assetWidth));
     petRoot.style.setProperty("--pet-visual-width", `${PET_VISUAL_WIDTH}px`);
-    petRoot.style.setProperty("--pet-visual-height", `${visualHeight}px`);
-    petFrame.style.setProperty("--pet-frame-height", `${frameHeight}px`);
-    petStage.style.setProperty("--pet-stage-height", `${stageHeight}px`);
+    petRoot.style.setProperty("--pet-visual-height", `${(PET_VISUAL_WIDTH * skin.assetHeight) / skin.assetWidth}px`);
     petRoot.style.setProperty("--mouth-mask-x", skin.layout === "fullBody" ? "51%" : "50.4%");
     petRoot.style.setProperty("--mouth-mask-y", skin.layout === "fullBody" ? "37.4%" : "42.7%");
     petRoot.style.setProperty("--mouth-mask-width", skin.layout === "fullBody" ? "8.8%" : "9.8%");
@@ -1475,21 +1468,16 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function positionBubble(): void {
-    const appRect = petApp.getBoundingClientRect();
-    const petRect = petRoot.getBoundingClientRect();
-    const visualScale = appRect.width > 0 ? petApp.offsetWidth / appRect.width : 1;
     const appHeight = petApp.offsetHeight;
     const appWidth = petApp.offsetWidth;
-    const petTop = (petRect.top - appRect.top) * visualScale;
-    const petLeft = (petRect.left - appRect.left) * visualScale;
-    const petWidth = petRect.width * visualScale;
-    const petHeight = petRect.height * visualScale;
+    const petTop = petStage.offsetTop + petFrame.offsetTop + petRoot.offsetTop;
+    const petLeft = petStage.offsetLeft + petFrame.offsetLeft + petRoot.offsetLeft;
     const bubbleWidth = bubble.offsetWidth || 310;
     const bubbleHeight = bubble.offsetHeight || 58;
     const anchorRatio = activeSkin.layout === "fullBody" ? 0.1 : 0.11;
-    const anchorY = petTop + petHeight * anchorRatio;
+    const anchorY = petTop + petRoot.offsetHeight * anchorRatio;
     const top = Math.min(Math.max(12, anchorY - bubbleHeight - 10), Math.max(12, appHeight - bubbleHeight - 18));
-    const left = Math.min(Math.max(bubbleWidth / 2 + 10, petLeft + petWidth / 2), appWidth - bubbleWidth / 2 - 10);
+    const left = Math.min(Math.max(bubbleWidth / 2 + 10, petLeft + petRoot.offsetWidth / 2), appWidth - bubbleWidth / 2 - 10);
 
     bubble.style.setProperty("--bubble-top", `${Math.round(top)}px`);
     bubble.style.setProperty("--bubble-left", `${Math.round(left)}px`);
