@@ -1475,16 +1475,21 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function positionBubble(): void {
+    const appRect = petApp.getBoundingClientRect();
+    const petRect = petRoot.getBoundingClientRect();
+    const visualScale = appRect.width > 0 ? petApp.offsetWidth / appRect.width : 1;
     const appHeight = petApp.offsetHeight;
     const appWidth = petApp.offsetWidth;
-    const petTop = petStage.offsetTop + petFrame.offsetTop + petRoot.offsetTop;
-    const petLeft = petStage.offsetLeft + petFrame.offsetLeft + petRoot.offsetLeft;
+    const petTop = (petRect.top - appRect.top) * visualScale;
+    const petLeft = (petRect.left - appRect.left) * visualScale;
+    const petWidth = petRect.width * visualScale;
+    const petHeight = petRect.height * visualScale;
     const bubbleWidth = bubble.offsetWidth || 310;
     const bubbleHeight = bubble.offsetHeight || 58;
     const anchorRatio = activeSkin.layout === "fullBody" ? 0.1 : 0.11;
-    const anchorY = petTop + petRoot.offsetHeight * anchorRatio;
+    const anchorY = petTop + petHeight * anchorRatio;
     const top = Math.min(Math.max(12, anchorY - bubbleHeight - 10), Math.max(12, appHeight - bubbleHeight - 18));
-    const left = Math.min(Math.max(bubbleWidth / 2 + 10, petLeft + petRoot.offsetWidth / 2), appWidth - bubbleWidth / 2 - 10);
+    const left = Math.min(Math.max(bubbleWidth / 2 + 10, petLeft + petWidth / 2), appWidth - bubbleWidth / 2 - 10);
 
     bubble.style.setProperty("--bubble-top", `${Math.round(top)}px`);
     bubble.style.setProperty("--bubble-left", `${Math.round(left)}px`);

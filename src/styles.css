@@ -629,8 +629,8 @@ button {
   isolation: isolate;
 }
 
-.pet-frame::before,
-.pet-frame::after {
+.pet::before,
+.pet::after {
   content: "";
   position: absolute;
   pointer-events: none;
@@ -639,9 +639,9 @@ button {
   transition: opacity 220ms ease, transform 220ms ease;
 }
 
-.pet-frame::before {
+.pet::before {
   z-index: 0;
-  inset: 42px 10px 24px;
+  inset: -28px -22px 4px;
   border: 1px solid rgba(115, 166, 199, 0.34);
   border-radius: 38px;
   background:
@@ -655,9 +655,9 @@ button {
     0 28px 70px rgba(48, 92, 124, 0.22);
 }
 
-.pet-frame::after {
-  z-index: 1;
-  inset: 58px 28px 44px;
+.pet::after {
+  z-index: 0;
+  inset: -12px -6px 24px;
   border-radius: 30px;
   border: 1px solid rgba(255, 255, 255, 0.66);
   background:
@@ -672,8 +672,8 @@ button {
   box-shadow: inset 0 0 0 1px rgba(79, 128, 159, 0.08);
 }
 
-.pet-frame[data-scene="framed"]::before,
-.pet-frame[data-scene="framed"]::after {
+.pet-frame[data-scene="framed"] .pet::before,
+.pet-frame[data-scene="framed"] .pet::after {
   opacity: 1;
   transform: translateY(0) scale(1);
 }
@@ -702,6 +702,7 @@ button {
   z-index: 3;
   width: var(--pet-visual-width, 350px);
   height: var(--pet-visual-height, 758px);
+  isolation: isolate;
   transform-origin: 50% 92%;
   animation: drift 4.8s ease-in-out infinite;
   cursor: grab;
