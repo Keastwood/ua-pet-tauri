@@ -200,6 +200,8 @@ const PET_VISUAL_WIDTH = 350;
 const MIN_SCALE = 0.75;
 const MAX_SCALE = 1.35;
 const SCALE_STEP = 0.05;
+const INTERACTIVE_DRAG_DELAY_MS = 180;
+const INTERACTIVE_DRAG_DISTANCE_PX = 7;
 const SCALE_STORAGE_KEY = "silver-pet.scale.v2";
 const SCENE_MODE_STORAGE_KEY = "silver-pet.scene-mode.v1";
 const LLM_INTERACTION_MODE_STORAGE_KEY = "silver-pet.llm-interaction-mode.v1";
@@ -648,6 +650,16 @@ window.addEventListener("DOMContentLoaded", () => {
   let voiceIntentionalStop = false;
   let voiceSensitivity = clampVoiceSensitivity(Number(localStorage.getItem(VOICE_SENSITIVITY_STORAGE_KEY) ?? "6"));
   let voiceLanguage = localStorage.getItem(VOICE_LANGUAGE_STORAGE_KEY) || "zh-CN";
+  let pendingInteractiveDrag:
+    | {
+        pointerId: number;
+        startX: number;
+        startY: number;
+        timer?: number;
+        dragging: boolean;
+      }
+    | null = null;
+  let suppressNextHitboxClick = false;
   const quickActionIcons = {
     chat:
       '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.2 17.2 4 21l4.7-1.4c1 .4 2.1.6 3.3.6 5 0 9-3.3 9-7.4s-4-7.4-9-7.4-9 3.3-9 7.4c0 1.7.7 3.3 1.9 4.4Z"/><path d="M8 11.2h8M8 14h5.6"/></svg>',
@@ -2305,6 +2317,66 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function clearPendingInteractiveDrag(): void {
+    clearTimer(pendingInteractiveDrag?.timer);
+    pendingInteractiveDrag = null;
+  }
+
+  function beginInteractiveDrag(event?: PointerEvent): void {
+    if (!pendingInteractiveDrag || pendingInteractiveDrag.dragging) {
+      return;
+    }
+
+    pendingInteractiveDrag.dragging = true;
+    suppressNextHitboxClick = true;
+    clearTimer(pendingInteractiveDrag.timer);
+    event?.preventDefault();
+    void safeStartDrag();
+  }
+
+  function startInteractiveDragGesture(event: PointerEvent): void {
+    if (event.button !== 0) {
+      return;
+    }
+
+    clearPendingInteractiveDrag();
+    pendingInteractiveDrag = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      dragging: false,
+    };
+
+    try {
+      (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    } catch {
+      // Some WebView elements may decline capture; movement tracking still works while hovered.
+    }
+
+    pendingInteractiveDrag.timer = window.setTimeout(() => {
+      beginInteractiveDrag();
+    }, INTERACTIVE_DRAG_DELAY_MS);
+  }
+
+  function updateInteractiveDragGesture(event: PointerEvent): void {
+    if (!pendingInteractiveDrag || pendingInteractiveDrag.pointerId !== event.pointerId || pendingInteractiveDrag.dragging) {
+      return;
+    }
+
+    const distance = Math.hypot(event.clientX - pendingInteractiveDrag.startX, event.clientY - pendingInteractiveDrag.startY);
+    if (distance >= INTERACTIVE_DRAG_DISTANCE_PX) {
+      beginInteractiveDrag(event);
+    }
+  }
+
+  function finishInteractiveDragGesture(event: PointerEvent): void {
+    if (!pendingInteractiveDrag || pendingInteractiveDrag.pointerId !== event.pointerId) {
+      return;
+    }
+
+    clearPendingInteractiveDrag();
+  }
+
   function startIdleChatter(): void {
     clearTimer(state.idleChatterInterval);
     state.idleChatterInterval = window.setInterval(() => {
@@ -2318,7 +2390,21 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   petStage.querySelectorAll<HTMLButtonElement>(".hitbox").forEach((button) => {
+    button.addEventListener("pointerdown", startInteractiveDragGesture);
+    button.addEventListener("pointermove", updateInteractiveDragGesture);
+    button.addEventListener("pointerup", finishInteractiveDragGesture);
+    button.addEventListener("pointercancel", finishInteractiveDragGesture);
+    button.addEventListener("lostpointercapture", () => {
+      clearPendingInteractiveDrag();
+    });
     button.addEventListener("click", (event) => {
+      if (suppressNextHitboxClick) {
+        suppressNextHitboxClick = false;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
       if (button.dataset.area === "head") {
         reactToHead(event);
       } else {
