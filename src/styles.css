@@ -44,9 +44,7 @@ button {
   position: relative;
   width: 430px;
   height: 1080px;
-  transform: scale(var(--app-scale));
-  transform-origin: bottom center;
-  will-change: transform;
+  zoom: var(--app-scale);
 }
 
 .pet-app {
