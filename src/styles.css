@@ -169,6 +169,10 @@ button {
   backdrop-filter: blur(18px);
 }
 
+.settings-panel[data-active-tab="mask"] .settings-card {
+  width: min(100%, 760px);
+}
+
 .history-card {
   width: min(100%, 378px);
   max-height: 670px;
@@ -1151,7 +1155,7 @@ button {
 
 .settings-tabs {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 8px;
   margin: 0 0 14px;
   padding: 5px;
@@ -1222,6 +1226,78 @@ button {
 .settings-actions--spread {
   justify-content: flex-start;
   flex-wrap: wrap;
+}
+
+.mask-editor {
+  gap: 12px;
+}
+
+.mask-editor__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 220px);
+  align-items: start;
+  gap: 12px;
+}
+
+.mask-editor__toolbar,
+.mask-editor__controls {
+  display: grid;
+  gap: 8px;
+}
+
+.mask-editor__toolbar {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.mask-editor__controls {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.mask-tool-btn {
+  min-height: 36px;
+  border: 1px solid rgba(100, 149, 182, 0.26);
+  border-radius: 14px;
+  color: rgba(31, 73, 104, 0.78);
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.76);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.mask-tool-btn[aria-pressed="true"] {
+  color: white;
+  border-color: rgba(53, 104, 137, 0.34);
+  background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+  box-shadow: 0 12px 22px rgba(47, 109, 150, 0.16);
+}
+
+.mask-editor__stage {
+  max-height: 520px;
+  overflow: auto;
+  border: 1px solid rgba(72, 128, 166, 0.24);
+  border-radius: 18px;
+  padding: 10px;
+  background:
+    linear-gradient(45deg, rgba(76, 124, 158, 0.08) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(76, 124, 158, 0.08) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(76, 124, 158, 0.08) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(76, 124, 158, 0.08) 75%),
+    rgba(255, 255, 255, 0.48);
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-size: 16px 16px;
+}
+
+#mask-editor-canvas {
+  display: block;
+  width: 100%;
+  max-width: 560px;
+  height: auto;
+  margin: 0 auto;
+  border-radius: 14px;
+  cursor: crosshair;
+  user-select: none;
+  touch-action: none;
 }
 
 .skin-importer--settings {

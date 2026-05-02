@@ -43,6 +43,7 @@
               <button class="settings-tab-btn" type="button" data-settings-tab="llm" aria-selected="true">LLM</button>
               <button class="settings-tab-btn" type="button" data-settings-tab="voice" aria-selected="false">语音</button>
               <button class="settings-tab-btn" type="button" data-settings-tab="skin" aria-selected="false">皮肤</button>
+              <button class="settings-tab-btn" type="button" data-settings-tab="mask" aria-selected="false">蒙版</button>
               <button class="settings-tab-btn" type="button" data-settings-tab="display" aria-selected="false">显示</button>
             </div>
 
@@ -176,6 +177,50 @@
                   <button id="skin-delete-btn" class="settings-btn settings-btn--danger" type="button">删除</button>
                 </div>
                 <p class="settings-hint">一键添加的皮肤会删除本地文件；随应用生成的皮肤会从列表隐藏。默认皮肤会保留，避免没有可用形象。</p>
+              </div>
+            </section>
+
+            <section class="settings-section" data-settings-section="mask" hidden>
+              <div class="settings-subcard mask-editor">
+                <div class="mask-editor__header">
+                  <div>
+                    <h3>身体部位蒙版</h3>
+                    <p id="mask-editor-status" class="settings-hint">保存后，点击命中会优先使用当前皮肤的自定义蒙版。</p>
+                  </div>
+                  <select id="mask-part-select" class="skin-importer__select" aria-label="选择部位蒙版"></select>
+                </div>
+
+                <div class="mask-editor__toolbar" role="toolbar" aria-label="蒙版编辑工具">
+                  <button class="mask-tool-btn" type="button" data-mask-tool="move" aria-pressed="true">移动</button>
+                  <button class="mask-tool-btn" type="button" data-mask-tool="brush" aria-pressed="false">画笔</button>
+                  <button class="mask-tool-btn" type="button" data-mask-tool="lasso" aria-pressed="false">套索</button>
+                  <button class="mask-tool-btn" type="button" data-mask-tool="eraser" aria-pressed="false">橡皮</button>
+                </div>
+
+                <div class="mask-editor__controls">
+                  <label class="settings-field">
+                    <span>笔刷 / 橡皮尺寸 <strong id="mask-brush-size-value">4%</strong></span>
+                    <input id="mask-brush-size-input" type="range" min="1" max="16" step="1" value="4" />
+                  </label>
+                  <label class="settings-field">
+                    <span>缩放 <strong id="mask-scale-value">100%</strong></span>
+                    <input id="mask-scale-input" type="range" min="40" max="220" step="5" value="100" />
+                  </label>
+                  <label class="settings-field">
+                    <span>旋转 <strong id="mask-rotation-value">0°</strong></span>
+                    <input id="mask-rotation-input" type="range" min="-180" max="180" step="1" value="0" />
+                  </label>
+                </div>
+
+                <div class="mask-editor__stage">
+                  <canvas id="mask-editor-canvas" width="560" height="900" aria-label="部位蒙版可视化编辑画布"></canvas>
+                </div>
+
+                <div class="settings-actions settings-actions--spread">
+                  <button id="mask-reset-part-btn" class="settings-btn" type="button">重置当前部位</button>
+                  <button id="mask-reset-all-btn" class="settings-btn" type="button">重置全部</button>
+                  <button id="mask-save-btn" class="settings-btn settings-btn--primary" type="button">保存蒙版</button>
+                </div>
               </div>
             </section>
 

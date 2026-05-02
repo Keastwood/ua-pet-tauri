@@ -97,6 +97,32 @@ interface PetPointerPosition {
   yPercent?: number;
 }
 
+interface MaskPoint {
+  x: number;
+  y: number;
+}
+
+interface BodyMaskStroke {
+  mode: "paint" | "erase";
+  size: number;
+  points: MaskPoint[];
+}
+
+interface BodyMaskPart {
+  id: string;
+  label: string;
+  shape: "rect" | "ellipse" | "polygon";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+  points?: MaskPoint[];
+  strokes?: BodyMaskStroke[];
+}
+
+type MaskTool = "move" | "brush" | "lasso" | "eraser";
+
 interface PetHitAreaRule {
   label: string;
   shape: "rect" | "ellipse";
@@ -215,6 +241,7 @@ const PET_SKIN_STORAGE_KEY = "silver-pet.skin.v1";
 const PET_SKIN_PROMPTS_STORAGE_KEY = "silver-pet.skin-prompts.v1";
 const PET_HIDDEN_SKINS_STORAGE_KEY = "silver-pet.hidden-skins.v1";
 const PET_FAVORITE_SKINS_STORAGE_KEY = "silver-pet.favorite-skins.v1";
+const PET_BODY_MASKS_STORAGE_KEY = "silver-pet.body-masks.v1";
 const VOICE_ENABLED_STORAGE_KEY = "silver-pet.voice-enabled.v1";
 const VOICE_SENSITIVITY_STORAGE_KEY = "silver-pet.voice-sensitivity.v1";
 const VOICE_LANGUAGE_STORAGE_KEY = "silver-pet.voice-language.v1";
@@ -307,6 +334,7 @@ let availablePetSkins: PetSkinDefinition[] = [...BUILT_IN_PET_SKINS];
 let hiddenPetSkinIds = readStoredStringSet(PET_HIDDEN_SKINS_STORAGE_KEY);
 let skinPromptOverrides = readStoredStringRecord(PET_SKIN_PROMPTS_STORAGE_KEY);
 let favoritePetSkinIds = readStoredStringList(PET_FAVORITE_SKINS_STORAGE_KEY);
+let bodyMaskOverrides = readStoredBodyMasks();
 const hadStoredFavoritePetSkins = localStorage.getItem(PET_FAVORITE_SKINS_STORAGE_KEY) !== null;
 
 const state: PetState = {
@@ -398,6 +426,99 @@ function readStoredStringList(key: string): string[] {
   }
 }
 
+function normalizeMaskPoint(point: unknown): MaskPoint | null {
+  if (!point || typeof point !== "object") {
+    return null;
+  }
+
+  const candidate = point as Partial<MaskPoint>;
+  const x = Number(candidate.x);
+  const y = Number(candidate.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return null;
+  }
+
+  return { x, y };
+}
+
+function normalizeBodyMaskPart(part: unknown): BodyMaskPart | null {
+  if (!part || typeof part !== "object") {
+    return null;
+  }
+
+  const candidate = part as Partial<BodyMaskPart>;
+  if (!candidate.id || !candidate.label) {
+    return null;
+  }
+
+  const shape = candidate.shape === "polygon" || candidate.shape === "rect" || candidate.shape === "ellipse"
+    ? candidate.shape
+    : "ellipse";
+  const x = Number(candidate.x);
+  const y = Number(candidate.y);
+  const width = Number(candidate.width);
+  const height = Number(candidate.height);
+  const rotation = Number(candidate.rotation ?? 0);
+  if (![x, y, width, height, rotation].every(Number.isFinite)) {
+    return null;
+  }
+
+  const points = Array.isArray(candidate.points)
+    ? candidate.points.map(normalizeMaskPoint).filter((point): point is MaskPoint => point !== null)
+    : undefined;
+  const strokes = Array.isArray(candidate.strokes)
+    ? candidate.strokes.flatMap((stroke) => {
+        if (!stroke || typeof stroke !== "object") {
+          return [];
+        }
+        const candidateStroke = stroke as Partial<BodyMaskStroke>;
+        const mode: BodyMaskStroke["mode"] = candidateStroke.mode === "erase" ? "erase" : "paint";
+        const size = Number(candidateStroke.size);
+        const strokePoints = Array.isArray(candidateStroke.points)
+          ? candidateStroke.points.map(normalizeMaskPoint).filter((point): point is MaskPoint => point !== null)
+          : [];
+        return Number.isFinite(size) && strokePoints.length > 0 ? [{ mode, size, points: strokePoints }] : [];
+      })
+    : undefined;
+
+  return {
+    id: String(candidate.id),
+    label: String(candidate.label),
+    shape,
+    x,
+    y,
+    width,
+    height,
+    rotation,
+    points,
+    strokes,
+  };
+}
+
+function readStoredBodyMasks(): Record<string, BodyMaskPart[]> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PET_BODY_MASKS_STORAGE_KEY) ?? "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+
+    const masks: Record<string, BodyMaskPart[]> = {};
+    for (const [skinId, parts] of Object.entries(parsed)) {
+      if (!Array.isArray(parts)) {
+        continue;
+      }
+      masks[skinId] = parts.map(normalizeBodyMaskPart).filter((part): part is BodyMaskPart => part !== null);
+    }
+    return masks;
+  } catch {
+    return {};
+  }
+}
+
+function saveBodyMaskOverrides(): void {
+  localStorage.setItem(PET_BODY_MASKS_STORAGE_KEY, JSON.stringify(bodyMaskOverrides));
+}
+
 function saveSkinPromptOverrides(): void {
   localStorage.setItem(PET_SKIN_PROMPTS_STORAGE_KEY, JSON.stringify(skinPromptOverrides));
 }
@@ -416,6 +537,128 @@ function getInteractionTool(id: string | null | undefined): InteractionTool {
 
 function getHitAreaRules(skin: PetSkinDefinition): PetHitAreaRule[] {
   return PET_HIT_AREA_RULES_BY_LAYOUT[skin.layout] ?? HALF_BODY_HIT_AREA_RULES;
+}
+
+function cloneBodyMaskPart(part: BodyMaskPart): BodyMaskPart {
+  return {
+    ...part,
+    points: part.points?.map((point) => ({ ...point })),
+    strokes: part.strokes?.map((stroke) => ({
+      ...stroke,
+      points: stroke.points.map((point) => ({ ...point })),
+    })),
+  };
+}
+
+function cloneBodyMaskParts(parts: BodyMaskPart[]): BodyMaskPart[] {
+  return parts.map(cloneBodyMaskPart);
+}
+
+function buildDefaultBodyMasks(skin: PetSkinDefinition): BodyMaskPart[] {
+  return getHitAreaRules(skin).map((rule, index) => ({
+    id: `rule-${index}`,
+    label: rule.label,
+    shape: rule.shape,
+    x: rule.x + rule.width / 2,
+    y: rule.y + rule.height / 2,
+    width: rule.width,
+    height: rule.height,
+    rotation: 0,
+  }));
+}
+
+function getBodyMasksForSkin(skin: PetSkinDefinition): BodyMaskPart[] {
+  const customMasks = bodyMaskOverrides[skin.id];
+  return customMasks && customMasks.length > 0 ? customMasks : buildDefaultBodyMasks(skin);
+}
+
+function rotatePoint(point: MaskPoint, center: MaskPoint, degrees: number): MaskPoint {
+  const radians = (degrees * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const dx = point.x - center.x;
+  const dy = point.y - center.y;
+  return {
+    x: center.x + dx * cos - dy * sin,
+    y: center.y + dx * sin + dy * cos,
+  };
+}
+
+function unrotatePoint(point: MaskPoint, center: MaskPoint, degrees: number): MaskPoint {
+  return rotatePoint(point, center, -degrees);
+}
+
+function distanceToSegment(point: MaskPoint, start: MaskPoint, end: MaskPoint): number {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  if (dx === 0 && dy === 0) {
+    return Math.hypot(point.x - start.x, point.y - start.y);
+  }
+
+  const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy)));
+  return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
+}
+
+function isPointInPolygon(point: MaskPoint, polygon: MaskPoint[]): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const current = polygon[i];
+    const previous = polygon[j];
+    const crosses = current.y > point.y !== previous.y > point.y;
+    if (crosses && point.x < ((previous.x - current.x) * (point.y - current.y)) / (previous.y - current.y) + current.x) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function isPointInStroke(point: MaskPoint, stroke: BodyMaskStroke): boolean {
+  const radius = stroke.size / 2;
+  if (stroke.points.length === 1) {
+    return Math.hypot(point.x - stroke.points[0].x, point.y - stroke.points[0].y) <= radius;
+  }
+
+  return stroke.points.some((strokePoint, index) => {
+    const next = stroke.points[index + 1];
+    return next ? distanceToSegment(point, strokePoint, next) <= radius : false;
+  });
+}
+
+function isPointInBodyMaskPart(position: PetPointerPosition, part: BodyMaskPart): boolean {
+  if (position.xPercent === undefined || position.yPercent === undefined) {
+    return false;
+  }
+
+  const point = { x: position.xPercent, y: position.yPercent };
+  const erased = part.strokes?.some((stroke) => stroke.mode === "erase" && isPointInStroke(point, stroke)) ?? false;
+  if (erased) {
+    return false;
+  }
+
+  const painted = part.strokes?.some((stroke) => stroke.mode === "paint" && isPointInStroke(point, stroke)) ?? false;
+  if (painted) {
+    return true;
+  }
+
+  const center = { x: part.x, y: part.y };
+  const localPoint = unrotatePoint(point, center, part.rotation);
+  if (part.shape === "rect") {
+    return Math.abs(localPoint.x - part.x) <= part.width / 2 && Math.abs(localPoint.y - part.y) <= part.height / 2;
+  }
+
+  if (part.shape === "polygon" && part.points && part.points.length >= 3) {
+    return isPointInPolygon(localPoint, part.points);
+  }
+
+  const radiusX = part.width / 2;
+  const radiusY = part.height / 2;
+  if (radiusX <= 0 || radiusY <= 0) {
+    return false;
+  }
+
+  const normalizedX = (localPoint.x - part.x) / radiusX;
+  const normalizedY = (localPoint.y - part.y) / radiusY;
+  return normalizedX * normalizedX + normalizedY * normalizedY <= 1;
 }
 
 function syncAvailablePetSkins(): void {
@@ -641,6 +884,19 @@ window.addEventListener("DOMContentLoaded", () => {
   const skinFavoriteStatus = must<HTMLParagraphElement>("#skin-favorite-status");
   const skinDeleteSelect = must<HTMLSelectElement>("#skin-delete-select");
   const skinDeleteButton = must<HTMLButtonElement>("#skin-delete-btn");
+  const maskPartSelect = must<HTMLSelectElement>("#mask-part-select");
+  const maskToolButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".mask-tool-btn[data-mask-tool]"));
+  const maskBrushSizeInput = must<HTMLInputElement>("#mask-brush-size-input");
+  const maskBrushSizeValue = must<HTMLElement>("#mask-brush-size-value");
+  const maskScaleInput = must<HTMLInputElement>("#mask-scale-input");
+  const maskScaleValue = must<HTMLElement>("#mask-scale-value");
+  const maskRotationInput = must<HTMLInputElement>("#mask-rotation-input");
+  const maskRotationValue = must<HTMLElement>("#mask-rotation-value");
+  const maskEditorStatus = must<HTMLParagraphElement>("#mask-editor-status");
+  const maskEditorCanvas = must<HTMLCanvasElement>("#mask-editor-canvas");
+  const maskResetPartButton = must<HTMLButtonElement>("#mask-reset-part-btn");
+  const maskResetAllButton = must<HTMLButtonElement>("#mask-reset-all-btn");
+  const maskSaveButton = must<HTMLButtonElement>("#mask-save-btn");
   const fxLayer = must<HTMLDivElement>("#fx-layer");
   const baseLayer = must<HTMLImageElement>("#base-layer");
   const blinkLayer = must<HTMLImageElement>("#blink-layer");
@@ -654,6 +910,16 @@ window.addEventListener("DOMContentLoaded", () => {
   let voiceIntentionalStop = false;
   let voiceSensitivity = clampVoiceSensitivity(Number(localStorage.getItem(VOICE_SENSITIVITY_STORAGE_KEY) ?? "6"));
   let voiceLanguage = localStorage.getItem(VOICE_LANGUAGE_STORAGE_KEY) || "zh-CN";
+  let maskEditorParts = cloneBodyMaskParts(getBodyMasksForSkin(activeSkin));
+  let selectedMaskPartId = maskEditorParts[0]?.id ?? "";
+  let selectedMaskTool: MaskTool = "move";
+  let activeMaskPointerId: number | null = null;
+  let activeMaskStroke: BodyMaskStroke | null = null;
+  let activeLassoPoints: MaskPoint[] = [];
+  let dragMaskSnapshot: BodyMaskPart | null = null;
+  let dragMaskStartPoint: MaskPoint | null = null;
+  let activeMaskMoveMode: "move" | "scale" | null = null;
+  let maskScaleReferencePart: BodyMaskPart | null = null;
   let pendingInteractiveDrag:
     | {
         pointerId: number;
@@ -726,6 +992,365 @@ window.addEventListener("DOMContentLoaded", () => {
     mouthOLayer.src = skin.images.mouthO;
     setBaseExpression(state.surprised ? "surprised" : "idle");
     preloadSkin(skin);
+  }
+
+  function getSelectedMaskPart(): BodyMaskPart | null {
+    return maskEditorParts.find((part) => part.id === selectedMaskPartId) ?? maskEditorParts[0] ?? null;
+  }
+
+  function setMaskEditorStatus(text: string): void {
+    maskEditorStatus.textContent = text;
+  }
+
+  function maskColor(index: number, alpha = 0.3): string {
+    const colors = [
+      `rgba(43, 125, 190, ${alpha})`,
+      `rgba(232, 122, 76, ${alpha})`,
+      `rgba(74, 152, 110, ${alpha})`,
+      `rgba(202, 116, 174, ${alpha})`,
+      `rgba(190, 148, 44, ${alpha})`,
+      `rgba(85, 111, 205, ${alpha})`,
+    ];
+    return colors[index % colors.length];
+  }
+
+  function resizeMaskEditorCanvasForSkin(skin: PetSkinDefinition): void {
+    const width = 560;
+    const height = Math.max(360, Math.round(width * (skin.assetHeight / skin.assetWidth)));
+    maskEditorCanvas.width = width;
+    maskEditorCanvas.height = height;
+  }
+
+  function percentToCanvas(point: MaskPoint): MaskPoint {
+    return {
+      x: (point.x / 100) * maskEditorCanvas.width,
+      y: (point.y / 100) * maskEditorCanvas.height,
+    };
+  }
+
+  function canvasToPercent(event: PointerEvent): MaskPoint {
+    const rect = maskEditorCanvas.getBoundingClientRect();
+    return {
+      x: Math.min(100, Math.max(0, ((event.clientX - rect.left) / rect.width) * 100)),
+      y: Math.min(100, Math.max(0, ((event.clientY - rect.top) / rect.height) * 100)),
+    };
+  }
+
+  function drawMaskPartPath(context: CanvasRenderingContext2D, part: BodyMaskPart): void {
+    const center = percentToCanvas({ x: part.x, y: part.y });
+    const width = (part.width / 100) * maskEditorCanvas.width;
+    const height = (part.height / 100) * maskEditorCanvas.height;
+
+    context.beginPath();
+    if (part.shape === "polygon" && part.points && part.points.length >= 3) {
+      const rotatedPoints = part.points.map((point) => percentToCanvas(rotatePoint(point, { x: part.x, y: part.y }, part.rotation)));
+      context.moveTo(rotatedPoints[0].x, rotatedPoints[0].y);
+      for (const point of rotatedPoints.slice(1)) {
+        context.lineTo(point.x, point.y);
+      }
+      context.closePath();
+      return;
+    }
+
+    context.save();
+    context.translate(center.x, center.y);
+    context.rotate((part.rotation * Math.PI) / 180);
+    if (part.shape === "rect") {
+      context.rect(-width / 2, -height / 2, width, height);
+    } else {
+      context.ellipse(0, 0, width / 2, height / 2, 0, 0, Math.PI * 2);
+    }
+    context.restore();
+  }
+
+  function drawMaskStroke(context: CanvasRenderingContext2D, stroke: BodyMaskStroke, color: string): void {
+    if (stroke.points.length === 0) {
+      return;
+    }
+
+    context.save();
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.strokeStyle = color;
+    context.lineWidth = Math.max(2, (stroke.size / 100) * maskEditorCanvas.width);
+    context.beginPath();
+    const first = percentToCanvas(stroke.points[0]);
+    context.moveTo(first.x, first.y);
+    for (const point of stroke.points.slice(1)) {
+      const canvasPoint = percentToCanvas(point);
+      context.lineTo(canvasPoint.x, canvasPoint.y);
+    }
+    context.stroke();
+    context.restore();
+  }
+
+  function getMaskScaleHandle(part: BodyMaskPart): MaskPoint {
+    return rotatePoint(
+      { x: part.x + part.width / 2, y: part.y + part.height / 2 },
+      { x: part.x, y: part.y },
+      part.rotation,
+    );
+  }
+
+  function drawMaskEditor(): void {
+    const context = maskEditorCanvas.getContext("2d");
+    if (!context) {
+      return;
+    }
+
+    context.clearRect(0, 0, maskEditorCanvas.width, maskEditorCanvas.height);
+    if (baseLayer.complete && baseLayer.naturalWidth > 0) {
+      context.save();
+      context.globalAlpha = 0.84;
+      context.drawImage(baseLayer, 0, 0, maskEditorCanvas.width, maskEditorCanvas.height);
+      context.restore();
+    }
+
+    maskEditorParts.forEach((part, index) => {
+      const selected = part.id === selectedMaskPartId;
+      drawMaskPartPath(context, part);
+      context.fillStyle = maskColor(index, selected ? 0.34 : 0.18);
+      context.strokeStyle = selected ? "rgba(24, 54, 75, 0.92)" : maskColor(index, 0.72);
+      context.lineWidth = selected ? 3 : 1.5;
+      context.fill();
+      context.stroke();
+
+      for (const stroke of part.strokes ?? []) {
+        drawMaskStroke(context, stroke, stroke.mode === "erase" ? "rgba(255, 255, 255, 0.88)" : maskColor(index, 0.82));
+      }
+
+      if (selected) {
+        const handle = percentToCanvas(getMaskScaleHandle(part));
+        context.save();
+        context.fillStyle = "#ffffff";
+        context.strokeStyle = "rgba(24, 54, 75, 0.88)";
+        context.lineWidth = 2;
+        context.beginPath();
+        context.rect(handle.x - 5, handle.y - 5, 10, 10);
+        context.fill();
+        context.stroke();
+        context.restore();
+      }
+    });
+
+    if (activeLassoPoints.length > 1) {
+      context.save();
+      context.strokeStyle = "rgba(20, 51, 72, 0.86)";
+      context.setLineDash([7, 5]);
+      context.lineWidth = 2;
+      context.beginPath();
+      const first = percentToCanvas(activeLassoPoints[0]);
+      context.moveTo(first.x, first.y);
+      for (const point of activeLassoPoints.slice(1)) {
+        const canvasPoint = percentToCanvas(point);
+        context.lineTo(canvasPoint.x, canvasPoint.y);
+      }
+      context.stroke();
+      context.restore();
+    }
+  }
+
+  function syncMaskToolButtons(): void {
+    for (const button of maskToolButtons) {
+      button.setAttribute("aria-pressed", String(button.dataset.maskTool === selectedMaskTool));
+    }
+  }
+
+  function renderMaskPartOptions(): void {
+    const previousValue = selectedMaskPartId;
+    maskPartSelect.replaceChildren();
+    for (const part of maskEditorParts) {
+      const option = document.createElement("option");
+      option.value = part.id;
+      option.textContent = part.label;
+      maskPartSelect.appendChild(option);
+    }
+    selectedMaskPartId = maskEditorParts.some((part) => part.id === previousValue)
+      ? previousValue
+      : maskEditorParts[0]?.id ?? "";
+    maskPartSelect.value = selectedMaskPartId;
+  }
+
+  function syncMaskControls(resetScale = true): void {
+    const part = getSelectedMaskPart();
+    maskBrushSizeValue.textContent = `${maskBrushSizeInput.value}%`;
+    if (!part) {
+      return;
+    }
+
+    maskRotationInput.value = String(Math.round(part.rotation));
+    maskRotationValue.textContent = `${Math.round(part.rotation)}°`;
+    if (resetScale) {
+      maskScaleInput.value = "100";
+      maskScaleValue.textContent = "100%";
+      maskScaleReferencePart = cloneBodyMaskPart(part);
+    }
+  }
+
+  function loadMaskEditorForSkin(skin: PetSkinDefinition): void {
+    maskEditorParts = cloneBodyMaskParts(getBodyMasksForSkin(skin));
+    selectedMaskPartId = maskEditorParts[0]?.id ?? "";
+    resizeMaskEditorCanvasForSkin(skin);
+    renderMaskPartOptions();
+    syncMaskControls();
+    drawMaskEditor();
+  }
+
+  function moveMaskPart(part: BodyMaskPart, dx: number, dy: number): void {
+    part.x += dx;
+    part.y += dy;
+    part.points = part.points?.map((point) => ({ x: point.x + dx, y: point.y + dy }));
+    part.strokes = part.strokes?.map((stroke) => ({
+      ...stroke,
+      points: stroke.points.map((point) => ({ x: point.x + dx, y: point.y + dy })),
+    }));
+  }
+
+  function scaleMaskPartFromSnapshot(part: BodyMaskPart, snapshot: BodyMaskPart, factor: number): void {
+    const center = { x: snapshot.x, y: snapshot.y };
+    part.x = snapshot.x;
+    part.y = snapshot.y;
+    part.width = Math.max(1, snapshot.width * factor);
+    part.height = Math.max(1, snapshot.height * factor);
+    part.points = snapshot.points?.map((point) => ({
+      x: center.x + (point.x - center.x) * factor,
+      y: center.y + (point.y - center.y) * factor,
+    }));
+    part.strokes = snapshot.strokes?.map((stroke) => ({
+      ...stroke,
+      points: stroke.points.map((point) => ({
+        x: center.x + (point.x - center.x) * factor,
+        y: center.y + (point.y - center.y) * factor,
+      })),
+    }));
+  }
+
+  function replaceMaskPart(nextPart: BodyMaskPart): void {
+    const index = maskEditorParts.findIndex((part) => part.id === nextPart.id);
+    if (index >= 0) {
+      maskEditorParts[index] = nextPart;
+    }
+  }
+
+  function getMaskPartAtPoint(point: MaskPoint): BodyMaskPart | null {
+    const position = { xPercent: point.x, yPercent: point.y };
+    return [...maskEditorParts].reverse().find((part) => isPointInBodyMaskPart(position, part)) ?? null;
+  }
+
+  function isNearMaskHandle(part: BodyMaskPart, point: MaskPoint): boolean {
+    const handle = getMaskScaleHandle(part);
+    return Math.hypot(handle.x - point.x, handle.y - point.y) <= 2.8;
+  }
+
+  function finishMaskPointer(): void {
+    const part = getSelectedMaskPart();
+    if (selectedMaskTool === "lasso" && part && activeLassoPoints.length >= 3) {
+      const xs = activeLassoPoints.map((point) => point.x);
+      const ys = activeLassoPoints.map((point) => point.y);
+      part.shape = "polygon";
+      part.points = activeLassoPoints.map((point) => ({ ...point }));
+      part.x = (Math.min(...xs) + Math.max(...xs)) / 2;
+      part.y = (Math.min(...ys) + Math.max(...ys)) / 2;
+      part.width = Math.max(1, Math.max(...xs) - Math.min(...xs));
+      part.height = Math.max(1, Math.max(...ys) - Math.min(...ys));
+      part.rotation = 0;
+      setMaskEditorStatus(`${part.label} 已替换为套索边界，记得保存。`);
+    }
+
+    activeMaskPointerId = null;
+    activeMaskStroke = null;
+    activeLassoPoints = [];
+    dragMaskSnapshot = null;
+    dragMaskStartPoint = null;
+    activeMaskMoveMode = null;
+    syncMaskControls();
+    drawMaskEditor();
+  }
+
+  function beginMaskPointer(event: PointerEvent): void {
+    const part = getSelectedMaskPart();
+    if (!part || event.button !== 0) {
+      return;
+    }
+
+    const point = canvasToPercent(event);
+    activeMaskPointerId = event.pointerId;
+    try {
+      maskEditorCanvas.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture can fail if the WebView cancels the gesture mid-frame.
+    }
+
+    event.preventDefault();
+    if (selectedMaskTool === "brush" || selectedMaskTool === "eraser") {
+      activeMaskStroke = {
+        mode: selectedMaskTool === "eraser" ? "erase" : "paint",
+        size: Number(maskBrushSizeInput.value),
+        points: [point],
+      };
+      part.strokes = [...(part.strokes ?? []), activeMaskStroke];
+      drawMaskEditor();
+      return;
+    }
+
+    if (selectedMaskTool === "lasso") {
+      activeLassoPoints = [point];
+      drawMaskEditor();
+      return;
+    }
+
+    const pointedPart = getMaskPartAtPoint(point);
+    if (pointedPart) {
+      selectedMaskPartId = pointedPart.id;
+      maskPartSelect.value = pointedPart.id;
+    }
+
+    const selectedPart = getSelectedMaskPart();
+    if (!selectedPart) {
+      return;
+    }
+
+    dragMaskSnapshot = cloneBodyMaskPart(selectedPart);
+    dragMaskStartPoint = point;
+    activeMaskMoveMode = isNearMaskHandle(selectedPart, point) ? "scale" : "move";
+    syncMaskControls(false);
+    drawMaskEditor();
+  }
+
+  function updateMaskPointer(event: PointerEvent): void {
+    if (activeMaskPointerId !== event.pointerId) {
+      return;
+    }
+
+    const point = canvasToPercent(event);
+    event.preventDefault();
+    if (activeMaskStroke) {
+      activeMaskStroke.points.push(point);
+      drawMaskEditor();
+      return;
+    }
+
+    if (selectedMaskTool === "lasso") {
+      activeLassoPoints.push(point);
+      drawMaskEditor();
+      return;
+    }
+
+    const part = getSelectedMaskPart();
+    if (!part || !dragMaskSnapshot || !dragMaskStartPoint || !activeMaskMoveMode) {
+      return;
+    }
+
+    const nextPart = cloneBodyMaskPart(dragMaskSnapshot);
+    if (activeMaskMoveMode === "scale") {
+      const startDistance = Math.max(0.1, Math.hypot(dragMaskStartPoint.x - dragMaskSnapshot.x, dragMaskStartPoint.y - dragMaskSnapshot.y));
+      const currentDistance = Math.max(0.1, Math.hypot(point.x - dragMaskSnapshot.x, point.y - dragMaskSnapshot.y));
+      scaleMaskPartFromSnapshot(nextPart, dragMaskSnapshot, currentDistance / startDistance);
+    } else {
+      moveMaskPart(nextPart, point.x - dragMaskStartPoint.x, point.y - dragMaskStartPoint.y);
+    }
+    replaceMaskPart(nextPart);
+    drawMaskEditor();
   }
 
   function setBaseExpression(expression: BaseExpression): void {
@@ -925,6 +1550,7 @@ window.addEventListener("DOMContentLoaded", () => {
     const skin = findPetSkin(skinId);
     state.selectedSkinId = skin.id;
     applySkinVisuals(skin);
+    loadMaskEditorForSkin(skin);
 
     if (options.persist ?? true) {
       localStorage.setItem(PET_SKIN_STORAGE_KEY, skin.id);
@@ -1623,6 +2249,7 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function setSettingsTab(tab: string): void {
+    settingsPanel.dataset.activeTab = tab;
     for (const button of settingsTabButtons) {
       button.setAttribute("aria-selected", String(button.dataset.settingsTab === tab));
     }
@@ -1754,8 +2381,19 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function resolvePetHitArea(event: MouseEvent | undefined, fallback: string): string {
     const position = getPetPointerPosition(event);
+    const matchedMask = getBodyMasksForSkin(activeSkin).find((part) => isPointInBodyMaskPart(position, part));
+    if (matchedMask) {
+      return matchedMask.label;
+    }
+
     const matchedRule = getHitAreaRules(activeSkin).find((rule) => isPointInHitRule(position, rule));
     return matchedRule?.label ?? fallback;
+  }
+
+  function resolvePetActionZone(event: MouseEvent, fallback: string | undefined): "head" | "body" {
+    const areaLabel = resolvePetHitArea(event, fallback === "head" ? "头部" : "身体");
+    const headKeywords = ["头", "脸", "眼", "鼻", "嘴", "耳", "发", "刘海", "呆毛"];
+    return headKeywords.some((keyword) => areaLabel.includes(keyword)) ? "head" : "body";
   }
 
   function getAreaLabel(area?: string | null): string {
@@ -2453,7 +3091,7 @@ window.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
-      if (button.dataset.area === "head") {
+      if (resolvePetActionZone(event, button.dataset.area) === "head") {
         reactToHead(event);
       } else {
         reactToBody(event);
@@ -2505,6 +3143,94 @@ window.addEventListener("DOMContentLoaded", () => {
       setSettingsTab(button.dataset.settingsTab ?? "llm");
     });
   }
+
+  for (const button of maskToolButtons) {
+    button.addEventListener("click", () => {
+      const nextTool = button.dataset.maskTool;
+      if (nextTool === "move" || nextTool === "brush" || nextTool === "lasso" || nextTool === "eraser") {
+        selectedMaskTool = nextTool;
+        syncMaskToolButtons();
+        setMaskEditorStatus(`已切换到${button.textContent ?? "工具"}工具。`);
+      }
+    });
+  }
+
+  maskPartSelect.addEventListener("change", () => {
+    selectedMaskPartId = maskPartSelect.value;
+    syncMaskControls();
+    drawMaskEditor();
+  });
+
+  maskBrushSizeInput.addEventListener("input", () => {
+    syncMaskControls(false);
+  });
+
+  maskScaleInput.addEventListener("input", () => {
+    const part = getSelectedMaskPart();
+    if (!part || !maskScaleReferencePart) {
+      return;
+    }
+    scaleMaskPartFromSnapshot(part, maskScaleReferencePart, Number(maskScaleInput.value) / 100);
+    maskScaleValue.textContent = `${maskScaleInput.value}%`;
+    drawMaskEditor();
+  });
+
+  maskScaleInput.addEventListener("change", () => {
+    const part = getSelectedMaskPart();
+    if (part) {
+      maskScaleReferencePart = cloneBodyMaskPart(part);
+      maskScaleInput.value = "100";
+      maskScaleValue.textContent = "100%";
+    }
+  });
+
+  maskRotationInput.addEventListener("input", () => {
+    const part = getSelectedMaskPart();
+    if (!part) {
+      return;
+    }
+    part.rotation = Number(maskRotationInput.value);
+    maskRotationValue.textContent = `${maskRotationInput.value}°`;
+    drawMaskEditor();
+  });
+
+  maskEditorCanvas.addEventListener("pointerdown", beginMaskPointer);
+  maskEditorCanvas.addEventListener("pointermove", updateMaskPointer);
+  maskEditorCanvas.addEventListener("pointerup", finishMaskPointer);
+  maskEditorCanvas.addEventListener("pointercancel", finishMaskPointer);
+  maskEditorCanvas.addEventListener("lostpointercapture", finishMaskPointer);
+  baseLayer.addEventListener("load", drawMaskEditor);
+
+  maskSaveButton.addEventListener("click", () => {
+    bodyMaskOverrides[activeSkin.id] = cloneBodyMaskParts(maskEditorParts);
+    saveBodyMaskOverrides();
+    setMaskEditorStatus(`${activeSkin.name} 的部位蒙版已保存。`);
+  });
+
+  maskResetPartButton.addEventListener("click", () => {
+    const part = getSelectedMaskPart();
+    if (!part) {
+      return;
+    }
+    const defaultPart = buildDefaultBodyMasks(activeSkin).find((candidate) => candidate.id === part.id);
+    if (defaultPart) {
+      replaceMaskPart(cloneBodyMaskPart(defaultPart));
+      setMaskEditorStatus(`${defaultPart.label} 已恢复为自动推测边界。`);
+      syncMaskControls();
+      drawMaskEditor();
+    }
+  });
+
+  maskResetAllButton.addEventListener("click", () => {
+    maskEditorParts = buildDefaultBodyMasks(activeSkin);
+    selectedMaskPartId = maskEditorParts[0]?.id ?? "";
+    delete bodyMaskOverrides[activeSkin.id];
+    saveBodyMaskOverrides();
+    renderMaskPartOptions();
+    syncMaskControls();
+    drawMaskEditor();
+    setMaskEditorStatus(`${activeSkin.name} 的自定义蒙版已清空。`);
+  });
 
   settingsForm.addEventListener("submit", (event) => {
     event.preventDefault();
