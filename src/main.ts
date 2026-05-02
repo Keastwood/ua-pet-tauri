@@ -20,7 +20,7 @@ const IS_MASK_EDITOR_WINDOW =
 
 type Tone = "warm" | "alert" | "hint";
 type BaseExpression = "idle" | "surprised";
-type InteractionToolId = "finger" | "palm" | "mouth" | "foot" | "feather" | "comb" | "snack";
+type InteractionToolId = string;
 
 interface PetState {
   affection: number;
@@ -152,6 +152,8 @@ interface InteractionTool {
   id: InteractionToolId;
   label: string;
   verb: string;
+  icon: string;
+  prompt?: string;
 }
 
 interface CustomSkinImagePaths {
@@ -253,6 +255,7 @@ const SCALE_STORAGE_KEY = "silver-pet.scale.v2";
 const SCENE_MODE_STORAGE_KEY = "silver-pet.scene-mode.v1";
 const LLM_INTERACTION_MODE_STORAGE_KEY = "silver-pet.llm-interaction-mode.v1";
 const INTERACTION_TOOL_STORAGE_KEY = "silver-pet.interaction-tool.v1";
+const INTERACTION_TOOLS_STORAGE_KEY = "silver-pet.interaction-tools.v1";
 const PET_SKIN_STORAGE_KEY = "silver-pet.skin.v1";
 const PET_SKIN_PROMPTS_STORAGE_KEY = "silver-pet.skin-prompts.v1";
 const PET_HIDDEN_SKINS_STORAGE_KEY = "silver-pet.hidden-skins.v1";
@@ -265,14 +268,14 @@ const MAX_FAVORITE_SKINS = 4;
 const PET_LLM_SYSTEM_PROMPT =
   "你是一个银白发桌宠，会陪用户工作和休息。请用中文回复，语气温柔、俏皮、像桌宠在说话。每次只说一句，控制在 36 个汉字以内，不要解释，不要加引号。";
 
-const INTERACTION_TOOLS: InteractionTool[] = [
-  { id: "finger", label: "手指", verb: "戳戳" },
-  { id: "palm", label: "手掌", verb: "揉捏" },
-  { id: "mouth", label: "嘴", verb: "亲吻" },
-  { id: "foot", label: "脚", verb: "踩" },
-  { id: "feather", label: "舌头", verb: "舔" },
-  { id: "comb", label: "鸡鸡", verb: "插入" },
-  { id: "snack", label: "零食", verb: "投喂" },
+const DEFAULT_INTERACTION_TOOLS: InteractionTool[] = [
+  { id: "finger", label: "手指", verb: "戳戳", icon: "☝" },
+  { id: "palm", label: "手掌", verb: "揉捏", icon: "✋" },
+  { id: "mouth", label: "嘴", verb: "亲吻", icon: "♡" },
+  { id: "foot", label: "脚", verb: "踩", icon: "◒" },
+  { id: "feather", label: "舌头", verb: "舔", icon: "〰" },
+  { id: "comb", label: "鸡鸡", verb: "插入", icon: "▥" },
+  { id: "snack", label: "零食", verb: "投喂", icon: "◇" },
 ];
 
 const HALF_BODY_HIT_AREA_RULES: PetHitAreaRule[] = [
@@ -351,6 +354,7 @@ let hiddenPetSkinIds = readStoredStringSet(PET_HIDDEN_SKINS_STORAGE_KEY);
 let skinPromptOverrides = readStoredStringRecord(PET_SKIN_PROMPTS_STORAGE_KEY);
 let favoritePetSkinIds = readStoredStringList(PET_FAVORITE_SKINS_STORAGE_KEY);
 let bodyMaskOverrides = readStoredBodyMasks();
+let interactionTools = readStoredInteractionTools();
 const hadStoredFavoritePetSkins = localStorage.getItem(PET_FAVORITE_SKINS_STORAGE_KEY) !== null;
 
 const state: PetState = {
@@ -440,6 +444,67 @@ function readStoredStringList(key: string): string[] {
     console.warn(`Failed to read ${key}:`, error);
     return [];
   }
+}
+
+function cloneInteractionTool(tool: InteractionTool): InteractionTool {
+  return { ...tool };
+}
+
+function normalizeInteractionTool(tool: unknown): InteractionTool | null {
+  if (!tool || typeof tool !== "object") {
+    return null;
+  }
+
+  const candidate = tool as Partial<InteractionTool>;
+  const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+  const label = typeof candidate.label === "string" ? candidate.label.trim() : "";
+  const verb = typeof candidate.verb === "string" ? candidate.verb.trim() : "";
+  const icon = typeof candidate.icon === "string" ? candidate.icon.trim() : "";
+  if (!id || !label || !verb) {
+    return null;
+  }
+
+  return {
+    id,
+    label,
+    verb,
+    icon: icon || label.slice(0, 1) || "互",
+    prompt: typeof candidate.prompt === "string" ? candidate.prompt.trim() : "",
+  };
+}
+
+function uniqueInteractionTools(tools: InteractionTool[]): InteractionTool[] {
+  const seen = new Set<string>();
+  const unique: InteractionTool[] = [];
+  for (const tool of tools) {
+    if (seen.has(tool.id)) {
+      continue;
+    }
+    seen.add(tool.id);
+    unique.push(tool);
+  }
+  return unique;
+}
+
+function readStoredInteractionTools(): InteractionTool[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(INTERACTION_TOOLS_STORAGE_KEY) ?? "[]");
+    if (!Array.isArray(parsed)) {
+      return DEFAULT_INTERACTION_TOOLS.map(cloneInteractionTool);
+    }
+
+    const tools = uniqueInteractionTools(
+      parsed.map(normalizeInteractionTool).filter((tool): tool is InteractionTool => tool !== null),
+    );
+    return tools.length > 0 ? tools : DEFAULT_INTERACTION_TOOLS.map(cloneInteractionTool);
+  } catch (error) {
+    console.warn(`Failed to read ${INTERACTION_TOOLS_STORAGE_KEY}:`, error);
+    return DEFAULT_INTERACTION_TOOLS.map(cloneInteractionTool);
+  }
+}
+
+function saveInteractionTools(): void {
+  localStorage.setItem(INTERACTION_TOOLS_STORAGE_KEY, JSON.stringify(interactionTools));
 }
 
 function normalizeMaskPoint(point: unknown): MaskPoint | null {
@@ -570,7 +635,7 @@ function saveFavoritePetSkins(): void {
 }
 
 function getInteractionTool(id: string | null | undefined): InteractionTool {
-  return INTERACTION_TOOLS.find((tool) => tool.id === id) ?? INTERACTION_TOOLS[0];
+  return interactionTools.find((tool) => tool.id === id) ?? interactionTools[0] ?? DEFAULT_INTERACTION_TOOLS[0];
 }
 
 function getHitAreaRules(skin: PetSkinDefinition): PetHitAreaRule[] {
@@ -926,9 +991,17 @@ window.addEventListener("DOMContentLoaded", () => {
   const historyButton = must<HTMLButtonElement>("#history-btn");
   const closeButton = must<HTMLButtonElement>("#close-btn");
   const interactionToolValue = must<HTMLElement>("#interaction-tool-value");
-  const interactionToolButtons = Array.from(
-    document.querySelectorAll<HTMLButtonElement>(".interaction-tool-btn[data-tool]"),
-  );
+  const interactionToolButtonsContainer = must<HTMLDivElement>(".interaction-tools__buttons");
+  const interactionToolEditorSelect = must<HTMLSelectElement>("#interaction-editor-select");
+  const interactionToolNameInput = must<HTMLInputElement>("#interaction-tool-name-input");
+  const interactionToolVerbInput = must<HTMLInputElement>("#interaction-tool-verb-input");
+  const interactionToolIconInput = must<HTMLInputElement>("#interaction-tool-icon-input");
+  const interactionToolPromptInput = must<HTMLTextAreaElement>("#interaction-tool-prompt-input");
+  const interactionToolAddButton = must<HTMLButtonElement>("#interaction-tool-add-btn");
+  const interactionToolDeleteButton = must<HTMLButtonElement>("#interaction-tool-delete-btn");
+  const interactionToolResetButton = must<HTMLButtonElement>("#interaction-tool-reset-btn");
+  const interactionToolSaveButton = must<HTMLButtonElement>("#interaction-tool-save-btn");
+  const interactionToolEditorStatus = must<HTMLParagraphElement>("#interaction-tool-editor-status");
   const skinValue = must<HTMLElement>("#skin-value");
   const skinButtons = must<HTMLDivElement>("#skin-buttons");
   const skinFileInput = must<HTMLInputElement>("#skin-file-input");
@@ -1028,6 +1101,137 @@ window.addEventListener("DOMContentLoaded", () => {
     if (pressed !== undefined) {
       button.setAttribute("aria-pressed", String(pressed));
     }
+  }
+
+  function getInteractionToolButtons(): HTMLButtonElement[] {
+    return Array.from(interactionToolButtonsContainer.querySelectorAll<HTMLButtonElement>(".interaction-tool-btn[data-tool]"));
+  }
+
+  function renderInteractionToolButtons(): void {
+    interactionToolButtonsContainer.replaceChildren();
+    for (const tool of interactionTools) {
+      const button = document.createElement("button");
+      button.className = "interaction-tool-btn";
+      button.type = "button";
+      button.dataset.tool = tool.id;
+      button.dataset.icon = tool.icon;
+      button.textContent = tool.label;
+      button.title = `${tool.label}：${tool.verb}`;
+      button.setAttribute("aria-label", tool.label);
+      button.setAttribute("aria-pressed", String(tool.id === state.selectedInteractionTool));
+      button.addEventListener("click", () => {
+        setInteractionTool(tool.id, { announce: true });
+      });
+      interactionToolButtonsContainer.appendChild(button);
+    }
+  }
+
+  function setInteractionToolEditorStatus(text: string): void {
+    interactionToolEditorStatus.textContent = text;
+  }
+
+  function renderInteractionToolEditorOptions(selectedId = interactionToolEditorSelect.value || state.selectedInteractionTool): void {
+    interactionToolEditorSelect.replaceChildren();
+    for (const tool of interactionTools) {
+      const option = document.createElement("option");
+      option.value = tool.id;
+      option.textContent = `${tool.icon} ${tool.label}`;
+      interactionToolEditorSelect.appendChild(option);
+    }
+
+    interactionToolEditorSelect.value = interactionTools.some((tool) => tool.id === selectedId)
+      ? selectedId
+      : interactionTools[0]?.id ?? "";
+  }
+
+  function loadInteractionToolEditor(toolId = interactionToolEditorSelect.value): void {
+    const tool = getInteractionTool(toolId);
+    interactionToolEditorSelect.value = tool.id;
+    interactionToolNameInput.value = tool.label;
+    interactionToolVerbInput.value = tool.verb;
+    interactionToolIconInput.value = tool.icon;
+    interactionToolPromptInput.value = tool.prompt ?? "";
+    interactionToolDeleteButton.disabled = interactionTools.length <= 1;
+  }
+
+  function syncInteractionToolEditor(selectedId = interactionToolEditorSelect.value || state.selectedInteractionTool): void {
+    renderInteractionToolEditorOptions(selectedId);
+    loadInteractionToolEditor(interactionToolEditorSelect.value);
+  }
+
+  function createInteractionToolId(): string {
+    return `custom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  }
+
+  function saveSelectedInteractionToolEditor(): void {
+    const index = interactionTools.findIndex((tool) => tool.id === interactionToolEditorSelect.value);
+    if (index < 0) {
+      return;
+    }
+
+    const label = interactionToolNameInput.value.trim();
+    const verb = interactionToolVerbInput.value.trim();
+    const icon = interactionToolIconInput.value.trim();
+    if (!label || !verb) {
+      setInteractionToolEditorStatus("显示名称和互动方式不能为空。");
+      return;
+    }
+
+    interactionTools[index] = {
+      ...interactionTools[index],
+      label,
+      verb,
+      icon: icon || label.slice(0, 1) || "互",
+      prompt: interactionToolPromptInput.value.trim(),
+    };
+    saveInteractionTools();
+    renderInteractionToolButtons();
+    syncInteractionToolEditor(interactionTools[index].id);
+    setInteractionTool(interactionTools[index].id, { persist: true });
+    setInteractionToolEditorStatus(`${label} 已保存。`);
+  }
+
+  function addInteractionTool(): void {
+    const id = createInteractionToolId();
+    const tool: InteractionTool = {
+      id,
+      label: `新控件 ${interactionTools.length + 1}`,
+      verb: "互动",
+      icon: "互",
+      prompt: "",
+    };
+    interactionTools = [...interactionTools, tool];
+    saveInteractionTools();
+    renderInteractionToolButtons();
+    syncInteractionToolEditor(id);
+    setInteractionTool(id, { persist: true, announce: true });
+    setInteractionToolEditorStatus("已添加新控件，编辑后保存即可用于互动。");
+  }
+
+  function deleteSelectedInteractionTool(): void {
+    if (interactionTools.length <= 1) {
+      setInteractionToolEditorStatus("至少保留一个互动控件。");
+      return;
+    }
+
+    const toolId = interactionToolEditorSelect.value;
+    const removed = getInteractionTool(toolId);
+    interactionTools = interactionTools.filter((tool) => tool.id !== toolId);
+    saveInteractionTools();
+    const nextTool = getInteractionTool(state.selectedInteractionTool);
+    renderInteractionToolButtons();
+    syncInteractionToolEditor(nextTool.id);
+    setInteractionTool(nextTool.id, { persist: true });
+    setInteractionToolEditorStatus(`${removed.label} 已删除。`);
+  }
+
+  function resetInteractionTools(): void {
+    interactionTools = DEFAULT_INTERACTION_TOOLS.map(cloneInteractionTool);
+    saveInteractionTools();
+    renderInteractionToolButtons();
+    syncInteractionToolEditor(interactionTools[0]?.id);
+    setInteractionTool(interactionTools[0]?.id, { persist: true, announce: true });
+    setInteractionToolEditorStatus("互动控件已恢复为默认配置。");
   }
 
   function preloadSkin(skin: PetSkinDefinition): void {
@@ -1644,7 +1848,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     const selectedTool = getInteractionTool(state.selectedInteractionTool);
     interactionToolValue.textContent = selectedTool.label;
-    for (const button of interactionToolButtons) {
+    for (const button of getInteractionToolButtons()) {
       button.setAttribute("aria-pressed", String(button.dataset.tool === selectedTool.id));
     }
 
@@ -2352,6 +2556,7 @@ window.addEventListener("DOMContentLoaded", () => {
     settingsPanel.dataset.show = "true";
     renderSkinPromptOptions();
     renderSkinDeleteOptions();
+    syncInteractionToolEditor();
     syncVoiceControls();
     void loadLlmSettings();
   }
@@ -2760,14 +2965,21 @@ window.addEventListener("DOMContentLoaded", () => {
     const requestId = ++llmRequestId;
     const { xPercent, yPercent } = getPetPointerPosition(event);
     const selectedTool = getInteractionTool(state.selectedInteractionTool);
-    const interactionTool = source === "click" ? selectedTool.label : null;
+    const interactionTool = source === "click" ? `${selectedTool.label}（${selectedTool.verb}）` : null;
     const skin = findPetSkin(state.selectedSkinId);
+    const interactionToolPrompt = selectedTool.prompt?.trim();
+    const interactionToolPromptText = source === "click"
+      ? [
+          `当前互动控件「${selectedTool.label}」的互动方式：${selectedTool.verb}`,
+          interactionToolPrompt ? `控件专属提示：${interactionToolPrompt}` : "",
+        ].filter(Boolean).join("。")
+      : "";
     const bodyMaskPart = findMaskPartForArea(area);
     const bodyMaskPrompt = bodyMaskPart?.prompt?.trim();
     const bodyMaskPromptText = bodyMaskPart && bodyMaskPrompt
       ? `当前互动部位「${bodyMaskPart.label}」的专属提示：${bodyMaskPrompt}`
       : "";
-    const mergedSkinPrompt = [getSkinPrompt(skin.id), bodyMaskPromptText]
+    const mergedSkinPrompt = [getSkinPrompt(skin.id), interactionToolPromptText, bodyMaskPromptText]
       .filter(Boolean)
       .join("\n");
     const streamId = `${Date.now()}-${requestId}`;
@@ -3524,11 +3736,25 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  for (const button of interactionToolButtons) {
-    button.addEventListener("click", () => {
-      setInteractionTool(button.dataset.tool, { announce: true });
-    });
-  }
+  interactionToolEditorSelect.addEventListener("change", () => {
+    loadInteractionToolEditor(interactionToolEditorSelect.value);
+  });
+
+  interactionToolSaveButton.addEventListener("click", () => {
+    saveSelectedInteractionToolEditor();
+  });
+
+  interactionToolAddButton.addEventListener("click", () => {
+    addInteractionTool();
+  });
+
+  interactionToolDeleteButton.addEventListener("click", () => {
+    deleteSelectedInteractionTool();
+  });
+
+  interactionToolResetButton.addEventListener("click", () => {
+    resetInteractionTools();
+  });
 
   skinAddButton.addEventListener("click", () => {
     skinFileInput.click();
@@ -3666,6 +3892,8 @@ window.addEventListener("DOMContentLoaded", () => {
 
   setIconButton(chatButton, quickActionIcons.chat, "聊天");
   setIconButton(historyButton, quickActionIcons.history, "历史");
+  renderInteractionToolButtons();
+  syncInteractionToolEditor();
   syncAvailablePetSkins();
   renderSkinButtons();
   setSettingsTab(IS_MASK_EDITOR_WINDOW ? "mask" : "llm");

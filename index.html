@@ -257,6 +257,44 @@
                   <button id="close-btn" class="settings-btn settings-btn--danger" type="button">退出桌宠</button>
                 </div>
               </div>
+
+              <div class="settings-subcard interaction-editor">
+                <h3>互动控件</h3>
+                <label class="settings-field">
+                  <span>选择控件</span>
+                  <select id="interaction-editor-select" class="skin-importer__select" aria-label="选择要编辑的互动控件"></select>
+                </label>
+                <div class="interaction-editor__grid">
+                  <label class="settings-field">
+                    <span>显示名称</span>
+                    <input id="interaction-tool-name-input" type="text" autocomplete="off" />
+                  </label>
+                  <label class="settings-field">
+                    <span>互动方式</span>
+                    <input id="interaction-tool-verb-input" type="text" autocomplete="off" />
+                  </label>
+                  <label class="settings-field">
+                    <span>图标</span>
+                    <input id="interaction-tool-icon-input" type="text" maxlength="4" autocomplete="off" />
+                  </label>
+                </div>
+                <label class="settings-field">
+                  <span>控件独立提示词</span>
+                  <textarea
+                    id="interaction-tool-prompt-input"
+                    rows="4"
+                    spellcheck="false"
+                    placeholder="例如：使用这个互动方式时，回应更主动、更害羞，动作描述更贴合当前控件。"
+                  ></textarea>
+                </label>
+                <div class="settings-actions settings-actions--spread">
+                  <button id="interaction-tool-add-btn" class="settings-btn" type="button">添加控件</button>
+                  <button id="interaction-tool-delete-btn" class="settings-btn settings-btn--danger" type="button">删除控件</button>
+                  <button id="interaction-tool-reset-btn" class="settings-btn" type="button">重置控件</button>
+                  <button id="interaction-tool-save-btn" class="settings-btn settings-btn--primary" type="button">保存控件</button>
+                </div>
+                <p id="interaction-tool-editor-status" class="settings-hint">保存后，侧边栏控件和 LLM 互动会使用新的名称、方式、图标和提示词。</p>
+              </div>
             </section>
           </div>
         </aside>
