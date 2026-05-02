@@ -1483,8 +1483,19 @@ fn close_pet(window: Window) -> Result<(), String> {
     window.close().map_err(|error| error.to_string())
 }
 
+fn mask_editor_url() -> Result<WebviewUrl, String> {
+    if cfg!(debug_assertions) {
+        "http://localhost:1420/?view=mask-editor"
+            .parse()
+            .map(WebviewUrl::External)
+            .map_err(|error| format!("invalid mask editor dev url: {error}"))
+    } else {
+        Ok(WebviewUrl::App("index.html?view=mask-editor".into()))
+    }
+}
+
 #[tauri::command]
-fn open_mask_editor(app: AppHandle) -> Result<(), String> {
+async fn open_mask_editor(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("mask-editor") {
         let _ = window.show();
         return window.set_focus().map_err(|error| error.to_string());
@@ -1493,7 +1504,7 @@ fn open_mask_editor(app: AppHandle) -> Result<(), String> {
     WebviewWindowBuilder::new(
         &app,
         "mask-editor",
-        WebviewUrl::App("index.html".into()),
+        mask_editor_url()?,
     )
     .title("Silver Pet Mask Editor")
     .inner_size(920.0, 760.0)
