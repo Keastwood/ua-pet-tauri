@@ -4,7 +4,9 @@ import { listen } from "@tauri-apps/api/event";
 import { DEFAULT_PET_SKIN_ID, PET_SKINS as BUILT_IN_PET_SKINS, getPetSkin as getBuiltInPetSkin } from "./skins";
 import type { PetSkinDefinition, PetSkinLayoutId } from "./skinTypes";
 
-const IS_MASK_EDITOR_WINDOW = new URLSearchParams(window.location.search).get("view") === "mask-editor";
+const IS_MASK_EDITOR_WINDOW =
+  new URLSearchParams(window.location.search).get("view") === "mask-editor" ||
+  window.location.hash === "#mask-editor";
 
 type Tone = "warm" | "alert" | "hint";
 type BaseExpression = "idle" | "surprised";

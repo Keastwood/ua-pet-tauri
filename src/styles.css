@@ -1366,7 +1366,10 @@ body[data-view="mask-editor"] .settings-panel {
   inset: 0;
   display: flex;
   padding: 14px;
+  opacity: 1;
+  pointer-events: auto;
   zoom: 1;
+  transform: none;
 }
 
 body[data-view="mask-editor"] .settings-card {
