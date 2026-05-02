@@ -1240,7 +1240,8 @@ button {
 }
 
 .mask-editor__toolbar,
-.mask-editor__controls {
+.mask-editor__controls,
+.mask-editor__part-settings {
   display: grid;
   gap: 8px;
 }
@@ -1251,6 +1252,42 @@ button {
 
 .mask-editor__controls {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.mask-editor__part-settings {
+  grid-template-columns: minmax(130px, 0.8fr) minmax(0, 1.4fr);
+}
+
+.mask-part-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  max-height: 116px;
+  overflow: auto;
+  padding: 2px;
+}
+
+.mask-part-item {
+  min-width: 0;
+  border: 1px solid rgba(100, 149, 182, 0.22);
+  border-radius: 14px;
+  padding: 8px 10px;
+  color: rgba(31, 73, 104, 0.8);
+  background: rgba(255, 255, 255, 0.52);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mask-part-item[aria-selected="true"] {
+  color: white;
+  border-color: rgba(53, 104, 137, 0.34);
+  background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+  box-shadow: 0 10px 20px rgba(47, 109, 150, 0.16);
 }
 
 .mask-tool-btn {
@@ -1290,8 +1327,8 @@ button {
 
 #mask-editor-canvas {
   display: block;
-  width: 100%;
-  max-width: 560px;
+  width: 560px;
+  max-width: none;
   height: auto;
   margin: 0 auto;
   border-radius: 14px;

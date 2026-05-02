@@ -111,6 +111,7 @@ interface BodyMaskStroke {
 interface BodyMaskPart {
   id: string;
   label: string;
+  prompt?: string;
   shape: "rect" | "ellipse" | "polygon";
   x: number;
   y: number;
@@ -484,6 +485,7 @@ function normalizeBodyMaskPart(part: unknown): BodyMaskPart | null {
   return {
     id: String(candidate.id),
     label: String(candidate.label),
+    prompt: typeof candidate.prompt === "string" ? candidate.prompt : undefined,
     shape,
     x,
     y,
@@ -558,6 +560,7 @@ function buildDefaultBodyMasks(skin: PetSkinDefinition): BodyMaskPart[] {
   return getHitAreaRules(skin).map((rule, index) => ({
     id: `rule-${index}`,
     label: rule.label,
+    prompt: "",
     shape: rule.shape,
     x: rule.x + rule.width / 2,
     y: rule.y + rule.height / 2,
@@ -885,6 +888,9 @@ window.addEventListener("DOMContentLoaded", () => {
   const skinDeleteSelect = must<HTMLSelectElement>("#skin-delete-select");
   const skinDeleteButton = must<HTMLButtonElement>("#skin-delete-btn");
   const maskPartSelect = must<HTMLSelectElement>("#mask-part-select");
+  const maskPartList = must<HTMLDivElement>("#mask-part-list");
+  const maskPartNameInput = must<HTMLInputElement>("#mask-part-name-input");
+  const maskPartPromptInput = must<HTMLTextAreaElement>("#mask-part-prompt-input");
   const maskToolButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".mask-tool-btn[data-mask-tool]"));
   const maskBrushSizeInput = must<HTMLInputElement>("#mask-brush-size-input");
   const maskBrushSizeValue = must<HTMLElement>("#mask-brush-size-value");
@@ -896,6 +902,10 @@ window.addEventListener("DOMContentLoaded", () => {
   const maskEditorCanvas = must<HTMLCanvasElement>("#mask-editor-canvas");
   const maskResetPartButton = must<HTMLButtonElement>("#mask-reset-part-btn");
   const maskResetAllButton = must<HTMLButtonElement>("#mask-reset-all-btn");
+  const maskAddPartButton = must<HTMLButtonElement>("#mask-add-part-btn");
+  const maskDeletePartButton = must<HTMLButtonElement>("#mask-delete-part-btn");
+  const maskLayerUpButton = must<HTMLButtonElement>("#mask-layer-up-btn");
+  const maskLayerDownButton = must<HTMLButtonElement>("#mask-layer-down-btn");
   const maskSaveButton = must<HTMLButtonElement>("#mask-save-btn");
   const fxLayer = must<HTMLDivElement>("#fx-layer");
   const baseLayer = must<HTMLImageElement>("#base-layer");
@@ -920,6 +930,7 @@ window.addEventListener("DOMContentLoaded", () => {
   let dragMaskStartPoint: MaskPoint | null = null;
   let activeMaskMoveMode: "move" | "scale" | null = null;
   let maskScaleReferencePart: BodyMaskPart | null = null;
+  let maskCanvasZoom = 1;
   let pendingInteractiveDrag:
     | {
         pointerId: number;
@@ -1019,6 +1030,11 @@ window.addEventListener("DOMContentLoaded", () => {
     const height = Math.max(360, Math.round(width * (skin.assetHeight / skin.assetWidth)));
     maskEditorCanvas.width = width;
     maskEditorCanvas.height = height;
+    applyMaskCanvasZoom();
+  }
+
+  function applyMaskCanvasZoom(): void {
+    maskEditorCanvas.style.width = `${Math.round(maskEditorCanvas.width * maskCanvasZoom)}px`;
   }
 
   function percentToCanvas(point: MaskPoint): MaskPoint {
@@ -1159,25 +1175,49 @@ window.addEventListener("DOMContentLoaded", () => {
   function renderMaskPartOptions(): void {
     const previousValue = selectedMaskPartId;
     maskPartSelect.replaceChildren();
+    maskPartList.replaceChildren();
     for (const part of maskEditorParts) {
       const option = document.createElement("option");
       option.value = part.id;
       option.textContent = part.label;
       maskPartSelect.appendChild(option);
+
+      const item = document.createElement("button");
+      item.className = "mask-part-item";
+      item.type = "button";
+      item.dataset.maskPart = part.id;
+      item.textContent = part.label;
+      item.title = part.label;
+      item.setAttribute("aria-selected", String(part.id === selectedMaskPartId));
+      item.addEventListener("click", () => {
+        selectedMaskPartId = part.id;
+        maskPartSelect.value = part.id;
+        syncMaskControls();
+        renderMaskPartOptions();
+        drawMaskEditor();
+      });
+      maskPartList.appendChild(item);
     }
     selectedMaskPartId = maskEditorParts.some((part) => part.id === previousValue)
       ? previousValue
       : maskEditorParts[0]?.id ?? "";
     maskPartSelect.value = selectedMaskPartId;
+    for (const item of maskPartList.querySelectorAll<HTMLButtonElement>(".mask-part-item[data-mask-part]")) {
+      item.setAttribute("aria-selected", String(item.dataset.maskPart === selectedMaskPartId));
+    }
   }
 
   function syncMaskControls(resetScale = true): void {
     const part = getSelectedMaskPart();
     maskBrushSizeValue.textContent = `${maskBrushSizeInput.value}%`;
     if (!part) {
+      maskPartNameInput.value = "";
+      maskPartPromptInput.value = "";
       return;
     }
 
+    maskPartNameInput.value = part.label;
+    maskPartPromptInput.value = part.prompt ?? "";
     maskRotationInput.value = String(Math.round(part.rotation));
     maskRotationValue.textContent = `${Math.round(part.rotation)}°`;
     if (resetScale) {
@@ -1232,9 +1272,13 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function getMaskPartAtPoint(point: MaskPoint): BodyMaskPart | null {
-    const position = { xPercent: point.x, yPercent: point.y };
-    return [...maskEditorParts].reverse().find((part) => isPointInBodyMaskPart(position, part)) ?? null;
+  function findMaskPartForArea(area: string | undefined | null): BodyMaskPart | null {
+    const normalizedArea = area?.trim();
+    if (!normalizedArea) {
+      return null;
+    }
+
+    return getBodyMasksForSkin(activeSkin).find((part) => part.label === normalizedArea) ?? null;
   }
 
   function isNearMaskHandle(part: BodyMaskPart, point: MaskPoint): boolean {
@@ -1297,12 +1341,6 @@ window.addEventListener("DOMContentLoaded", () => {
       activeLassoPoints = [point];
       drawMaskEditor();
       return;
-    }
-
-    const pointedPart = getMaskPartAtPoint(point);
-    if (pointedPart) {
-      selectedMaskPartId = pointedPart.id;
-      maskPartSelect.value = pointedPart.id;
     }
 
     const selectedPart = getSelectedMaskPart();
@@ -2381,7 +2419,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function resolvePetHitArea(event: MouseEvent | undefined, fallback: string): string {
     const position = getPetPointerPosition(event);
-    const matchedMask = getBodyMasksForSkin(activeSkin).find((part) => isPointInBodyMaskPart(position, part));
+    const matchedMask = [...getBodyMasksForSkin(activeSkin)].reverse().find((part) => isPointInBodyMaskPart(position, part));
     if (matchedMask) {
       return matchedMask.label;
     }
@@ -2640,6 +2678,14 @@ window.addEventListener("DOMContentLoaded", () => {
     const selectedTool = getInteractionTool(state.selectedInteractionTool);
     const interactionTool = source === "click" ? selectedTool.label : null;
     const skin = findPetSkin(state.selectedSkinId);
+    const bodyMaskPart = findMaskPartForArea(area);
+    const bodyMaskPrompt = bodyMaskPart?.prompt?.trim();
+    const bodyMaskPromptText = bodyMaskPart && bodyMaskPrompt
+      ? `当前互动部位「${bodyMaskPart.label}」的专属提示：${bodyMaskPrompt}`
+      : "";
+    const mergedSkinPrompt = [getSkinPrompt(skin.id), bodyMaskPromptText]
+      .filter(Boolean)
+      .join("\n");
     const streamId = `${Date.now()}-${requestId}`;
     let streamedContent = "";
     let hasStreamed = false;
@@ -2674,7 +2720,7 @@ window.addEventListener("DOMContentLoaded", () => {
           userText: userText?.trim() || null,
           skinId: skin.id,
           skinName: skin.name,
-          skinPrompt: getSkinPrompt(skin.id) || null,
+          skinPrompt: mergedSkinPrompt || null,
           affection: state.affection,
           mood: getMoodLabel(),
           sceneMode: state.sceneMode,
@@ -3158,7 +3204,29 @@ window.addEventListener("DOMContentLoaded", () => {
   maskPartSelect.addEventListener("change", () => {
     selectedMaskPartId = maskPartSelect.value;
     syncMaskControls();
+    renderMaskPartOptions();
     drawMaskEditor();
+  });
+
+  maskPartNameInput.addEventListener("input", () => {
+    const part = getSelectedMaskPart();
+    if (!part) {
+      return;
+    }
+    part.label = maskPartNameInput.value.trim() || "未命名部位";
+    renderMaskPartOptions();
+    maskPartSelect.value = part.id;
+    setMaskEditorStatus("部位名称已更新，记得保存蒙版。");
+    drawMaskEditor();
+  });
+
+  maskPartPromptInput.addEventListener("input", () => {
+    const part = getSelectedMaskPart();
+    if (!part) {
+      return;
+    }
+    part.prompt = maskPartPromptInput.value.trim();
+    setMaskEditorStatus("部位提示词已更新，记得保存蒙版。");
   });
 
   maskBrushSizeInput.addEventListener("input", () => {
@@ -3199,12 +3267,81 @@ window.addEventListener("DOMContentLoaded", () => {
   maskEditorCanvas.addEventListener("pointerup", finishMaskPointer);
   maskEditorCanvas.addEventListener("pointercancel", finishMaskPointer);
   maskEditorCanvas.addEventListener("lostpointercapture", finishMaskPointer);
+  maskEditorCanvas.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    const direction = event.deltaY < 0 ? 1 : -1;
+    maskCanvasZoom = Math.min(3, Math.max(0.45, Number((maskCanvasZoom + direction * 0.1).toFixed(2))));
+    applyMaskCanvasZoom();
+    setMaskEditorStatus(`画布缩放 ${Math.round(maskCanvasZoom * 100)}%。`);
+  }, { passive: false });
   baseLayer.addEventListener("load", drawMaskEditor);
 
   maskSaveButton.addEventListener("click", () => {
     bodyMaskOverrides[activeSkin.id] = cloneBodyMaskParts(maskEditorParts);
     saveBodyMaskOverrides();
     setMaskEditorStatus(`${activeSkin.name} 的部位蒙版已保存。`);
+  });
+
+  maskAddPartButton.addEventListener("click", () => {
+    const id = `custom-${Date.now().toString(36)}`;
+    const newPart: BodyMaskPart = {
+      id,
+      label: `新部位 ${maskEditorParts.length + 1}`,
+      prompt: "",
+      shape: "ellipse",
+      x: 50,
+      y: 50,
+      width: 18,
+      height: 14,
+      rotation: 0,
+    };
+    maskEditorParts.push(newPart);
+    selectedMaskPartId = id;
+    renderMaskPartOptions();
+    syncMaskControls();
+    drawMaskEditor();
+    setMaskEditorStatus("已添加新部位，调整后保存即可用于命中和 LLM。");
+  });
+
+  maskDeletePartButton.addEventListener("click", () => {
+    if (maskEditorParts.length <= 1) {
+      setMaskEditorStatus("至少保留一个部位蒙版。");
+      return;
+    }
+    const index = maskEditorParts.findIndex((part) => part.id === selectedMaskPartId);
+    if (index < 0) {
+      return;
+    }
+    const [removed] = maskEditorParts.splice(index, 1);
+    selectedMaskPartId = maskEditorParts[Math.min(index, maskEditorParts.length - 1)]?.id ?? "";
+    renderMaskPartOptions();
+    syncMaskControls();
+    drawMaskEditor();
+    setMaskEditorStatus(`${removed.label} 已删除，记得保存蒙版。`);
+  });
+
+  maskLayerUpButton.addEventListener("click", () => {
+    const index = maskEditorParts.findIndex((part) => part.id === selectedMaskPartId);
+    if (index < 0 || index >= maskEditorParts.length - 1) {
+      setMaskEditorStatus("当前部位已经在最上层。");
+      return;
+    }
+    [maskEditorParts[index], maskEditorParts[index + 1]] = [maskEditorParts[index + 1], maskEditorParts[index]];
+    renderMaskPartOptions();
+    drawMaskEditor();
+    setMaskEditorStatus("当前部位已上移一层，重叠命中会更优先。");
+  });
+
+  maskLayerDownButton.addEventListener("click", () => {
+    const index = maskEditorParts.findIndex((part) => part.id === selectedMaskPartId);
+    if (index <= 0) {
+      setMaskEditorStatus("当前部位已经在最下层。");
+      return;
+    }
+    [maskEditorParts[index], maskEditorParts[index - 1]] = [maskEditorParts[index - 1], maskEditorParts[index]];
+    renderMaskPartOptions();
+    drawMaskEditor();
+    setMaskEditorStatus("当前部位已下移一层。");
   });
 
   maskResetPartButton.addEventListener("click", () => {

@@ -190,6 +190,19 @@
                   <select id="mask-part-select" class="skin-importer__select" aria-label="选择部位蒙版"></select>
                 </div>
 
+                <div id="mask-part-list" class="mask-part-list" aria-label="部位蒙版列表"></div>
+
+                <div class="mask-editor__part-settings">
+                  <label class="settings-field">
+                    <span>部位名称</span>
+                    <input id="mask-part-name-input" type="text" />
+                  </label>
+                  <label class="settings-field">
+                    <span>部位提示词</span>
+                    <textarea id="mask-part-prompt-input" rows="3" spellcheck="false" placeholder="例如：用户摸到这里时更敏感、害羞，回复更轻声一点。"></textarea>
+                  </label>
+                </div>
+
                 <div class="mask-editor__toolbar" role="toolbar" aria-label="蒙版编辑工具">
                   <button class="mask-tool-btn" type="button" data-mask-tool="move" aria-pressed="true">移动</button>
                   <button class="mask-tool-btn" type="button" data-mask-tool="brush" aria-pressed="false">画笔</button>
@@ -217,6 +230,10 @@
                 </div>
 
                 <div class="settings-actions settings-actions--spread">
+                  <button id="mask-add-part-btn" class="settings-btn" type="button">添加部位</button>
+                  <button id="mask-delete-part-btn" class="settings-btn settings-btn--danger" type="button">删除部位</button>
+                  <button id="mask-layer-up-btn" class="settings-btn" type="button">上移层级</button>
+                  <button id="mask-layer-down-btn" class="settings-btn" type="button">下移层级</button>
                   <button id="mask-reset-part-btn" class="settings-btn" type="button">重置当前部位</button>
                   <button id="mask-reset-all-btn" class="settings-btn" type="button">重置全部</button>
                   <button id="mask-save-btn" class="settings-btn settings-btn--primary" type="button">保存蒙版</button>
