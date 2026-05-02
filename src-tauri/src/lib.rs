@@ -8,7 +8,7 @@ use std::{
 };
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, Position, Size,
-    Window,
+    WebviewUrl, WebviewWindowBuilder, Window,
 };
 use tauri_plugin_global_shortcut::{
     Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
@@ -1483,6 +1483,29 @@ fn close_pet(window: Window) -> Result<(), String> {
     window.close().map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn open_mask_editor(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("mask-editor") {
+        let _ = window.show();
+        return window.set_focus().map_err(|error| error.to_string());
+    }
+
+    WebviewWindowBuilder::new(
+        &app,
+        "mask-editor",
+        WebviewUrl::App("index.html?view=mask-editor".into()),
+    )
+    .title("Silver Pet Mask Editor")
+    .inner_size(920.0, 760.0)
+    .min_inner_size(760.0, 620.0)
+    .resizable(true)
+    .decorations(true)
+    .transparent(false)
+    .build()
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1520,6 +1543,7 @@ pub fn run() {
             save_llm_config,
             save_custom_skin,
             move_pet_window,
+            open_mask_editor,
             resize_pet_window,
             set_pet_always_on_top,
             close_pet

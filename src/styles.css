@@ -14,6 +14,7 @@
   --accent: #6ba4cb;
   --accent-deep: #3d6f96;
   --app-scale: 1;
+  --app-ui-scale: 1;
 }
 
 * {
@@ -115,6 +116,7 @@ button {
   padding: 12px;
   opacity: 0;
   pointer-events: none;
+  zoom: var(--app-ui-scale);
   transform: translateY(10px) scale(0.98);
   transition: opacity 180ms ease, transform 180ms ease;
 }
@@ -139,6 +141,7 @@ button {
   padding: 12px;
   opacity: 0;
   pointer-events: none;
+  zoom: var(--app-ui-scale);
   transform: translateY(10px) scale(0.98);
   transition: opacity 180ms ease, transform 180ms ease;
 }
@@ -167,10 +170,6 @@ button {
     inset 0 1px 0 rgba(255, 255, 255, 0.92),
     0 30px 80px rgba(38, 76, 105, 0.28);
   backdrop-filter: blur(18px);
-}
-
-.settings-panel[data-active-tab="mask"] .settings-card {
-  width: min(100%, 760px);
 }
 
 .history-card {
@@ -417,6 +416,7 @@ button {
   backdrop-filter: blur(18px);
   opacity: 0;
   pointer-events: none;
+  zoom: var(--app-ui-scale);
   transform: translate(-50%, 12px) scale(0.98);
   transition: opacity 180ms ease, transform 180ms ease;
 }
@@ -1155,7 +1155,7 @@ button {
 
 .settings-tabs {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
   margin: 0 0 14px;
   padding: 5px;
@@ -1335,6 +1335,52 @@ button {
   cursor: crosshair;
   user-select: none;
   touch-action: none;
+}
+
+body[data-view="mask-editor"] {
+  align-items: stretch;
+  justify-content: stretch;
+  background:
+    radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0) 30%),
+    linear-gradient(160deg, #f5fbff, #e2f1f8 54%, #d4e8f3);
+}
+
+body[data-view="mask-editor"] .window-shell {
+  width: 100vw;
+  height: 100vh;
+  zoom: 1;
+}
+
+body[data-view="mask-editor"] .pet-app {
+  padding: 14px;
+}
+
+body[data-view="mask-editor"] .speech-bubble,
+body[data-view="mask-editor"] .history-panel,
+body[data-view="mask-editor"] .floating-input,
+body[data-view="mask-editor"] .pet-stage {
+  display: none;
+}
+
+body[data-view="mask-editor"] .settings-panel {
+  inset: 0;
+  display: flex;
+  padding: 14px;
+  zoom: 1;
+}
+
+body[data-view="mask-editor"] .settings-card {
+  width: min(100%, 900px);
+  max-height: calc(100vh - 28px);
+}
+
+body[data-view="mask-editor"] .settings-tabs,
+body[data-view="mask-editor"] .settings-section:not([data-settings-section="mask"]) {
+  display: none;
+}
+
+body[data-view="mask-editor"] .mask-editor__stage {
+  max-height: calc(100vh - 390px);
 }
 
 .skin-importer--settings {

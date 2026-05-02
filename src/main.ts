@@ -4,6 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import { DEFAULT_PET_SKIN_ID, PET_SKINS as BUILT_IN_PET_SKINS, getPetSkin as getBuiltInPetSkin } from "./skins";
 import type { PetSkinDefinition, PetSkinLayoutId } from "./skinTypes";
 
+const IS_MASK_EDITOR_WINDOW = new URLSearchParams(window.location.search).get("view") === "mask-editor";
+
 type Tone = "warm" | "alert" | "hint";
 type BaseExpression = "idle" | "surprised";
 type InteractionToolId = "finger" | "palm" | "mouth" | "foot" | "feather" | "comb" | "snack";
@@ -787,6 +789,7 @@ function getWindowSizeForScale(scale: number): { width: number; height: number }
 
 function setCssScale(scale: number): void {
   document.documentElement.style.setProperty("--app-scale", String(scale));
+  document.documentElement.style.setProperty("--app-ui-scale", String(1 / scale));
 }
 
 async function movePetWindow(x: number, y: number): Promise<void> {
@@ -809,6 +812,10 @@ async function getPetWindowPosition(): Promise<WindowPosition> {
   return invoke<WindowPosition>("get_pet_window_position");
 }
 
+async function openMaskEditorWindow(): Promise<void> {
+  await invoke("open_mask_editor");
+}
+
 async function moveWindowToDesktopCorner(scale = state.scale): Promise<void> {
   const marginX = 28;
   const marginY = 54;
@@ -819,6 +826,7 @@ async function moveWindowToDesktopCorner(scale = state.scale): Promise<void> {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
+  document.body.dataset.view = IS_MASK_EDITOR_WINDOW ? "mask-editor" : "pet";
   const petApp = must<HTMLElement>(".pet-app");
   const petRoot = must<HTMLDivElement>("#pet");
   const petStage = must<HTMLDivElement>("#pet-stage");
@@ -862,6 +870,7 @@ window.addEventListener("DOMContentLoaded", () => {
   const chatButton = must<HTMLButtonElement>("#chat-btn");
   const scaleDownButton = must<HTMLButtonElement>("#scale-down-btn");
   const scaleUpButton = must<HTMLButtonElement>("#scale-up-btn");
+  const openMaskEditorButton = must<HTMLButtonElement>("#open-mask-editor-btn");
   const sceneButton = must<HTMLButtonElement>("#scene-btn");
   const llmModeButton = must<HTMLButtonElement>("#llm-mode-btn");
   const historyButton = must<HTMLButtonElement>("#history-btn");
@@ -930,7 +939,6 @@ window.addEventListener("DOMContentLoaded", () => {
   let dragMaskStartPoint: MaskPoint | null = null;
   let activeMaskMoveMode: "move" | "scale" | null = null;
   let maskScaleReferencePart: BodyMaskPart | null = null;
-  let maskCanvasZoom = 1;
   let pendingInteractiveDrag:
     | {
         pointerId: number;
@@ -1030,11 +1038,6 @@ window.addEventListener("DOMContentLoaded", () => {
     const height = Math.max(360, Math.round(width * (skin.assetHeight / skin.assetWidth)));
     maskEditorCanvas.width = width;
     maskEditorCanvas.height = height;
-    applyMaskCanvasZoom();
-  }
-
-  function applyMaskCanvasZoom(): void {
-    maskEditorCanvas.style.width = `${Math.round(maskEditorCanvas.width * maskCanvasZoom)}px`;
   }
 
   function percentToCanvas(point: MaskPoint): MaskPoint {
@@ -1263,6 +1266,19 @@ window.addEventListener("DOMContentLoaded", () => {
         y: center.y + (point.y - center.y) * factor,
       })),
     }));
+  }
+
+  function scaleSelectedMaskPart(factor: number): void {
+    const part = getSelectedMaskPart();
+    if (!part) {
+      return;
+    }
+
+    scaleMaskPartFromSnapshot(part, cloneBodyMaskPart(part), factor);
+    maskScaleReferencePart = cloneBodyMaskPart(part);
+    maskScaleInput.value = "100";
+    maskScaleValue.textContent = "100%";
+    drawMaskEditor();
   }
 
   function replaceMaskPart(nextPart: BodyMaskPart): void {
@@ -2269,6 +2285,13 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function openSettings(): void {
+    if (IS_MASK_EDITOR_WINDOW) {
+      settingsPanel.hidden = false;
+      settingsPanel.dataset.show = "true";
+      setSettingsTab("mask");
+      return;
+    }
+
     settingsPanel.hidden = false;
     settingsPanel.dataset.show = "true";
     renderSkinPromptOptions();
@@ -2278,6 +2301,11 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function closeSettings(): void {
+    if (IS_MASK_EDITOR_WINDOW) {
+      void closePet();
+      return;
+    }
+
     settingsPanel.dataset.show = "false";
     window.setTimeout(() => {
       if (settingsPanel.dataset.show !== "true") {
@@ -3269,10 +3297,10 @@ window.addEventListener("DOMContentLoaded", () => {
   maskEditorCanvas.addEventListener("lostpointercapture", finishMaskPointer);
   maskEditorCanvas.addEventListener("wheel", (event) => {
     event.preventDefault();
-    const direction = event.deltaY < 0 ? 1 : -1;
-    maskCanvasZoom = Math.min(3, Math.max(0.45, Number((maskCanvasZoom + direction * 0.1).toFixed(2))));
-    applyMaskCanvasZoom();
-    setMaskEditorStatus(`画布缩放 ${Math.round(maskCanvasZoom * 100)}%。`);
+    const factor = event.deltaY < 0 ? 1.08 : 0.92;
+    scaleSelectedMaskPart(factor);
+    const part = getSelectedMaskPart();
+    setMaskEditorStatus(part ? `${part.label} 已通过滚轮缩放。` : "请选择一个部位蒙版。");
   }, { passive: false });
   baseLayer.addEventListener("load", drawMaskEditor);
 
@@ -3522,6 +3550,13 @@ window.addEventListener("DOMContentLoaded", () => {
     void applyScale(state.scale + SCALE_STEP);
   });
 
+  openMaskEditorButton.addEventListener("click", () => {
+    void openMaskEditorWindow().catch((error) => {
+      console.error(error);
+      setBubble("蒙版编辑器打开失败了。", "alert", 1800);
+    });
+  });
+
   sceneButton.addEventListener("click", () => {
     setSceneMode(!state.sceneMode, { announce: true });
   });
@@ -3575,7 +3610,7 @@ window.addEventListener("DOMContentLoaded", () => {
   setIconButton(historyButton, quickActionIcons.history, "历史");
   syncAvailablePetSkins();
   renderSkinButtons();
-  setSettingsTab("llm");
+  setSettingsTab(IS_MASK_EDITOR_WINDOW ? "mask" : "llm");
   updateStatus();
   bubble.dataset.show = "false";
   blinkLayer.hidden = true;
@@ -3597,17 +3632,27 @@ window.addEventListener("DOMContentLoaded", () => {
   setInteractionTool(savedInteractionTool, { persist: false });
   state.voiceEnabled = savedVoiceEnabled;
   syncVoiceControls();
-  if (savedVoiceEnabled) {
+  if (savedVoiceEnabled && !IS_MASK_EDITOR_WINDOW) {
     void startVoiceRecognition({ persist: false, announce: false });
   }
-  void applyScale(savedScale, { persist: false, showBubble: false, ensureDocked: true });
+  if (IS_MASK_EDITOR_WINDOW) {
+    settingsPanel.hidden = false;
+    settingsPanel.dataset.show = "true";
+    loadMaskEditorForSkin(findPetSkin(savedSkin));
+  } else {
+    void applyScale(savedScale, { persist: false, showBubble: false, ensureDocked: true });
+  }
   void loadCustomPetSkins(savedSkin);
 
-  void listen("pet-open-input", () => {
-    openFloatingInput();
-  });
+  if (!IS_MASK_EDITOR_WINDOW) {
+    void listen("pet-open-input", () => {
+      openFloatingInput();
+    });
+  }
 
-  setBubble("可以拖动我，也可以用滚轮或 +/- 调整大小。", "hint", 3400);
-  scheduleBlink();
-  startIdleChatter();
+  if (!IS_MASK_EDITOR_WINDOW) {
+    setBubble("可以拖动我，也可以用滚轮或 +/- 调整大小。", "hint", 3400);
+    scheduleBlink();
+    startIdleChatter();
+  }
 });
