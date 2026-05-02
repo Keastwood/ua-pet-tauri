@@ -34,6 +34,11 @@ interface ApplyScaleOptions {
   ensureDocked?: boolean;
 }
 
+interface WindowPosition {
+  x: number;
+  y: number;
+}
+
 interface LlmMessage {
   role: "system" | "user" | "assistant";
   content: string;
@@ -197,8 +202,8 @@ declare global {
 const BASE_WINDOW_WIDTH = 430;
 const BASE_WINDOW_HEIGHT = 1080;
 const PET_VISUAL_WIDTH = 350;
-const MIN_SCALE = 0.75;
-const MAX_SCALE = 1.35;
+const MIN_SCALE = 0.3;
+const MAX_SCALE = 3;
 const SCALE_STEP = 0.05;
 const INTERACTIVE_DRAG_DELAY_MS = 180;
 const INTERACTIVE_DRAG_DISTANCE_PX = 7;
@@ -554,8 +559,8 @@ async function closePet(): Promise<void> {
   await invoke("close_pet");
 }
 
-async function startPetDrag(): Promise<void> {
-  await invoke("start_pet_drag");
+async function getPetWindowPosition(): Promise<WindowPosition> {
+  return invoke<WindowPosition>("get_pet_window_position");
 }
 
 async function moveWindowToDesktopCorner(scale = state.scale): Promise<void> {
@@ -615,7 +620,6 @@ window.addEventListener("DOMContentLoaded", () => {
   const llmModeButton = must<HTMLButtonElement>("#llm-mode-btn");
   const historyButton = must<HTMLButtonElement>("#history-btn");
   const closeButton = must<HTMLButtonElement>("#close-btn");
-  const dragHandle = must<HTMLButtonElement>("#drag-handle");
   const interactionToolValue = must<HTMLElement>("#interaction-tool-value");
   const interactionToolButtons = Array.from(
     document.querySelectorAll<HTMLButtonElement>(".interaction-tool-btn[data-tool]"),
@@ -655,6 +659,12 @@ window.addEventListener("DOMContentLoaded", () => {
         pointerId: number;
         startX: number;
         startY: number;
+        startScreenX: number;
+        startScreenY: number;
+        currentScreenX: number;
+        currentScreenY: number;
+        windowX?: number;
+        windowY?: number;
         timer?: number;
         dragging: boolean;
       }
@@ -702,10 +712,11 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function applySkinVisuals(skin: PetSkinDefinition): void {
     activeSkin = skin;
+    const petVisualHeight = (PET_VISUAL_WIDTH * skin.assetHeight) / skin.assetWidth;
     petRoot.dataset.skinLayout = skin.layout;
-    petRoot.style.setProperty("--pet-aspect-height", String(skin.assetHeight / skin.assetWidth));
-    petRoot.style.setProperty("--pet-visual-width", `${PET_VISUAL_WIDTH}px`);
-    petRoot.style.setProperty("--pet-visual-height", `${(PET_VISUAL_WIDTH * skin.assetHeight) / skin.assetWidth}px`);
+    petStage.style.setProperty("--pet-aspect-height", String(skin.assetHeight / skin.assetWidth));
+    petStage.style.setProperty("--pet-visual-width", `${PET_VISUAL_WIDTH}px`);
+    petStage.style.setProperty("--pet-visual-height", `${petVisualHeight}px`);
     petRoot.style.setProperty("--mouth-mask-x", skin.layout === "fullBody" ? "51%" : "50.4%");
     petRoot.style.setProperty("--mouth-mask-y", skin.layout === "fullBody" ? "37.4%" : "42.7%");
     petRoot.style.setProperty("--mouth-mask-width", skin.layout === "fullBody" ? "8.8%" : "9.8%");
@@ -2300,31 +2311,51 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  async function safeStartDrag(): Promise<void> {
-    try {
-      state.dockedToCorner = false;
-      await startPetDrag();
-    } catch (error) {
-      console.error(error);
-      setBubble("拖动暂时失败了。", "alert", 1800);
-    }
-  }
-
   function clearPendingInteractiveDrag(): void {
     clearTimer(pendingInteractiveDrag?.timer);
     pendingInteractiveDrag = null;
   }
 
-  function beginInteractiveDrag(event?: PointerEvent): void {
+  async function moveInteractiveDragTo(screenX: number, screenY: number): Promise<void> {
+    const drag = pendingInteractiveDrag;
+    if (!drag?.dragging || drag.windowX === undefined || drag.windowY === undefined) {
+      return;
+    }
+
+    const x = drag.windowX + screenX - drag.startScreenX;
+    const y = drag.windowY + screenY - drag.startScreenY;
+    await movePetWindow(x, y);
+  }
+
+  async function beginInteractiveDrag(event?: PointerEvent): Promise<void> {
     if (!pendingInteractiveDrag || pendingInteractiveDrag.dragging) {
       return;
     }
 
-    pendingInteractiveDrag.dragging = true;
+    const drag = pendingInteractiveDrag;
+    drag.dragging = true;
     suppressNextHitboxClick = true;
-    clearTimer(pendingInteractiveDrag.timer);
+    state.dockedToCorner = false;
+    clearTimer(drag.timer);
+    if (event) {
+      drag.currentScreenX = event.screenX;
+      drag.currentScreenY = event.screenY;
+    }
     event?.preventDefault();
-    void safeStartDrag();
+
+    try {
+      const position = await getPetWindowPosition();
+      if (pendingInteractiveDrag !== drag) {
+        return;
+      }
+      drag.windowX = position.x;
+      drag.windowY = position.y;
+      await moveInteractiveDragTo(drag.currentScreenX, drag.currentScreenY);
+    } catch (error) {
+      console.error(error);
+      clearPendingInteractiveDrag();
+      setBubble("拖动暂时失败了。", "alert", 1800);
+    }
   }
 
   function startInteractiveDragGesture(event: PointerEvent): void {
@@ -2337,6 +2368,10 @@ window.addEventListener("DOMContentLoaded", () => {
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
+      startScreenX: event.screenX,
+      startScreenY: event.screenY,
+      currentScreenX: event.screenX,
+      currentScreenY: event.screenY,
       dragging: false,
     };
 
@@ -2347,18 +2382,29 @@ window.addEventListener("DOMContentLoaded", () => {
     }
 
     pendingInteractiveDrag.timer = window.setTimeout(() => {
-      beginInteractiveDrag();
+      void beginInteractiveDrag();
     }, INTERACTIVE_DRAG_DELAY_MS);
   }
 
   function updateInteractiveDragGesture(event: PointerEvent): void {
-    if (!pendingInteractiveDrag || pendingInteractiveDrag.pointerId !== event.pointerId || pendingInteractiveDrag.dragging) {
+    if (!pendingInteractiveDrag || pendingInteractiveDrag.pointerId !== event.pointerId) {
+      return;
+    }
+
+    pendingInteractiveDrag.currentScreenX = event.screenX;
+    pendingInteractiveDrag.currentScreenY = event.screenY;
+
+    if (pendingInteractiveDrag.dragging) {
+      event.preventDefault();
+      void moveInteractiveDragTo(event.screenX, event.screenY).catch((error) => {
+        console.error(error);
+      });
       return;
     }
 
     const distance = Math.hypot(event.clientX - pendingInteractiveDrag.startX, event.clientY - pendingInteractiveDrag.startY);
     if (distance >= INTERACTIVE_DRAG_DISTANCE_PX) {
-      beginInteractiveDrag(event);
+      void beginInteractiveDrag(event);
     }
   }
 
@@ -2368,6 +2414,20 @@ window.addEventListener("DOMContentLoaded", () => {
     }
 
     clearPendingInteractiveDrag();
+  }
+
+  function startImmediateWindowDrag(event: PointerEvent): void {
+    startInteractiveDragGesture(event);
+    void beginInteractiveDrag(event);
+  }
+
+  function trackWindowDragTarget(element: HTMLElement): void {
+    element.addEventListener("pointermove", updateInteractiveDragGesture);
+    element.addEventListener("pointerup", finishInteractiveDragGesture);
+    element.addEventListener("pointercancel", finishInteractiveDragGesture);
+    element.addEventListener("lostpointercapture", () => {
+      clearPendingInteractiveDrag();
+    });
   }
 
   function startIdleChatter(): void {
@@ -2384,12 +2444,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   petStage.querySelectorAll<HTMLButtonElement>(".hitbox").forEach((button) => {
     button.addEventListener("pointerdown", startInteractiveDragGesture);
-    button.addEventListener("pointermove", updateInteractiveDragGesture);
-    button.addEventListener("pointerup", finishInteractiveDragGesture);
-    button.addEventListener("pointercancel", finishInteractiveDragGesture);
-    button.addEventListener("lostpointercapture", () => {
-      clearPendingInteractiveDrag();
-    });
+    trackWindowDragTarget(button);
     button.addEventListener("click", (event) => {
       if (suppressNextHitboxClick) {
         suppressNextHitboxClick = false;
@@ -2406,21 +2461,14 @@ window.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  dragHandle.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) {
-      return;
-    }
-    event.preventDefault();
-    void safeStartDrag();
-  });
-
   petRoot.addEventListener("pointerdown", (event) => {
     if (event.button !== 0 || event.target !== petRoot) {
       return;
     }
     event.preventDefault();
-    void safeStartDrag();
+    startImmediateWindowDrag(event);
   });
+  trackWindowDragTarget(petRoot);
 
   petFrame.addEventListener("pointerdown", (event) => {
     const target = event.target as HTMLElement;
@@ -2432,11 +2480,12 @@ window.addEventListener("DOMContentLoaded", () => {
       target.classList.contains("pet-shadow")
     ) {
       event.preventDefault();
-      void safeStartDrag();
+      startImmediateWindowDrag(event);
     }
   });
+  trackWindowDragTarget(petFrame);
 
-  petFrame.addEventListener("contextmenu", (event) => {
+  petRoot.addEventListener("contextmenu", (event) => {
     event.preventDefault();
     openSettings();
   });

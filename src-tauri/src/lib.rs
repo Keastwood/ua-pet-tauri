@@ -81,6 +81,13 @@ struct LlmConfigView {
     default_pet_interaction_system_prompt: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowPosition {
+    x: f64,
+    y: f64,
+}
+
 #[derive(Debug, Clone)]
 struct EffectiveLlmConfig {
     api_key: String,
@@ -1431,6 +1438,17 @@ fn move_pet_window(window: Window, x: f64, y: f64) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn get_pet_window_position(window: Window) -> Result<WindowPosition, String> {
+    let scale_factor = window.scale_factor().map_err(|error| error.to_string())?;
+    let position = window.outer_position().map_err(|error| error.to_string())?;
+
+    Ok(WindowPosition {
+        x: position.x as f64 / scale_factor,
+        y: position.y as f64 / scale_factor,
+    })
+}
+
+#[tauri::command]
 fn resize_pet_window(window: Window, width: f64, height: f64) -> Result<(), String> {
     let scale_factor = window.scale_factor().map_err(|error| error.to_string())?;
     let outer_position = window.outer_position().map_err(|error| error.to_string())?;
@@ -1451,11 +1469,6 @@ fn resize_pet_window(window: Window, width: f64, height: f64) -> Result<(), Stri
     window
         .set_position(Position::Physical(PhysicalPosition::new(next_x, next_y)))
         .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn start_pet_drag(window: Window) -> Result<(), String> {
-    window.start_dragging().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1499,6 +1512,7 @@ pub fn run() {
             delete_custom_skin,
             get_llm_config,
             get_interaction_history,
+            get_pet_window_position,
             list_custom_skins,
             llm_chat,
             llm_pet_interact,
@@ -1507,7 +1521,6 @@ pub fn run() {
             save_custom_skin,
             move_pet_window,
             resize_pet_window,
-            start_pet_drag,
             set_pet_always_on_top,
             close_pet
         ])
