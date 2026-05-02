@@ -1,10 +1,20 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { DEFAULT_PET_SKIN_ID, PET_SKINS as BUILT_IN_PET_SKINS, getPetSkin as getBuiltInPetSkin } from "./skins";
 import type { PetSkinDefinition, PetSkinLayoutId } from "./skinTypes";
 
+function getCurrentWindowLabel(): string | null {
+  try {
+    return getCurrentWindow().label;
+  } catch {
+    return null;
+  }
+}
+
 const IS_MASK_EDITOR_WINDOW =
+  getCurrentWindowLabel() === "mask-editor" ||
   new URLSearchParams(window.location.search).get("view") === "mask-editor" ||
   window.location.hash === "#mask-editor";
 

@@ -1493,7 +1493,7 @@ fn open_mask_editor(app: AppHandle) -> Result<(), String> {
     WebviewWindowBuilder::new(
         &app,
         "mask-editor",
-        WebviewUrl::App("index.html#mask-editor".into()),
+        WebviewUrl::App("index.html".into()),
     )
     .title("Silver Pet Mask Editor")
     .inner_size(920.0, 760.0)
