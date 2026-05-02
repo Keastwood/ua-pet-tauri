@@ -126,6 +126,7 @@ interface BodyMaskPart {
   id: string;
   label: string;
   prompt?: string;
+  layer?: number;
   shape: "rect" | "ellipse" | "polygon";
   x: number;
   y: number;
@@ -474,6 +475,7 @@ function normalizeBodyMaskPart(part: unknown): BodyMaskPart | null {
   const width = Number(candidate.width);
   const height = Number(candidate.height);
   const rotation = Number(candidate.rotation ?? 0);
+  const layer = Number(candidate.layer);
   if (![x, y, width, height, rotation].every(Number.isFinite)) {
     return null;
   }
@@ -500,6 +502,7 @@ function normalizeBodyMaskPart(part: unknown): BodyMaskPart | null {
     id: String(candidate.id),
     label: String(candidate.label),
     prompt: typeof candidate.prompt === "string" ? candidate.prompt : undefined,
+    layer: Number.isFinite(layer) ? layer : undefined,
     shape,
     x,
     y,
@@ -509,6 +512,24 @@ function normalizeBodyMaskPart(part: unknown): BodyMaskPart | null {
     points,
     strokes,
   };
+}
+
+function isAutoRuleMaskId(id: string): boolean {
+  return /^rule-\d+$/.test(id);
+}
+
+function preserveLegacyLayerOrder(parts: BodyMaskPart[]): BodyMaskPart[] {
+  if (parts.some((part) => Number.isFinite(part.layer))) {
+    return parts;
+  }
+
+  const allPartsAreAutoRules = parts.length > 0 && parts.every((part) => isAutoRuleMaskId(part.id));
+  const autoRuleOrderWasChanged = allPartsAreAutoRules && parts.some((part, index) => part.id !== `rule-${index}`);
+  if (!autoRuleOrderWasChanged) {
+    return parts;
+  }
+
+  return parts.map((part, index) => ({ ...part, layer: index }));
 }
 
 function readStoredBodyMasks(): Record<string, BodyMaskPart[]> {
@@ -523,7 +544,8 @@ function readStoredBodyMasks(): Record<string, BodyMaskPart[]> {
       if (!Array.isArray(parts)) {
         continue;
       }
-      masks[skinId] = parts.map(normalizeBodyMaskPart).filter((part): part is BodyMaskPart => part !== null);
+      const normalizedParts = parts.map(normalizeBodyMaskPart).filter((part): part is BodyMaskPart => part !== null);
+      masks[skinId] = preserveLegacyLayerOrder(normalizedParts);
     }
     return masks;
   } catch {
@@ -581,10 +603,26 @@ function buildDefaultBodyMasks(skin: PetSkinDefinition): BodyMaskPart[] {
     width: rule.width,
     height: rule.height,
     rotation: 0,
-  }));
+  })).sort((a, b) => getBodyMaskArea(b) - getBodyMaskArea(a));
+}
+
+function getBodyMaskArea(part: BodyMaskPart): number {
+  return Math.max(0, part.width) * Math.max(0, part.height);
+}
+
+function getBodyMaskHitPriority(part: BodyMaskPart): number {
+  return Number.isFinite(part.layer) ? Number(part.layer) + 100000 : -getBodyMaskArea(part);
+}
+
+function getBodyMasksForHitTesting(skin: PetSkinDefinition): BodyMaskPart[] {
+  return cloneBodyMaskParts(getBodyMasksForSkin(skin)).sort((a, b) => {
+    const priorityDiff = getBodyMaskHitPriority(b) - getBodyMaskHitPriority(a);
+    return priorityDiff !== 0 ? priorityDiff : getBodyMaskArea(a) - getBodyMaskArea(b);
+  });
 }
 
 function getBodyMasksForSkin(skin: PetSkinDefinition): BodyMaskPart[] {
+  bodyMaskOverrides = readStoredBodyMasks();
   const customMasks = bodyMaskOverrides[skin.id];
   return customMasks && customMasks.length > 0 ? customMasks : buildDefaultBodyMasks(skin);
 }
@@ -1027,6 +1065,12 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function getSelectedMaskPart(): BodyMaskPart | null {
     return maskEditorParts.find((part) => part.id === selectedMaskPartId) ?? maskEditorParts[0] ?? null;
+  }
+
+  function markMaskEditorLayerOrderExplicit(): void {
+    maskEditorParts.forEach((part, index) => {
+      part.layer = index;
+    });
   }
 
   function setMaskEditorStatus(text: string): void {
@@ -2459,7 +2503,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function resolvePetHitArea(event: MouseEvent | undefined, fallback: string): string {
     const position = getPetPointerPosition(event);
-    const matchedMask = [...getBodyMasksForSkin(activeSkin)].reverse().find((part) => isPointInBodyMaskPart(position, part));
+    const matchedMask = getBodyMasksForHitTesting(activeSkin).find((part) => isPointInBodyMaskPart(position, part));
     if (matchedMask) {
       return matchedMask.label;
     }
@@ -3367,6 +3411,7 @@ window.addEventListener("DOMContentLoaded", () => {
       return;
     }
     [maskEditorParts[index], maskEditorParts[index + 1]] = [maskEditorParts[index + 1], maskEditorParts[index]];
+    markMaskEditorLayerOrderExplicit();
     renderMaskPartOptions();
     drawMaskEditor();
     setMaskEditorStatus("当前部位已上移一层，重叠命中会更优先。");
@@ -3379,6 +3424,7 @@ window.addEventListener("DOMContentLoaded", () => {
       return;
     }
     [maskEditorParts[index], maskEditorParts[index - 1]] = [maskEditorParts[index - 1], maskEditorParts[index]];
+    markMaskEditorLayerOrderExplicit();
     renderMaskPartOptions();
     drawMaskEditor();
     setMaskEditorStatus("当前部位已下移一层。");
