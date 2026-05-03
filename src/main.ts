@@ -46,6 +46,7 @@ interface ApplyScaleOptions {
   persist?: boolean;
   showBubble?: boolean;
   ensureDocked?: boolean;
+  forceResize?: boolean;
 }
 
 interface WindowPosition {
@@ -244,8 +245,11 @@ declare global {
 }
 
 const BASE_WINDOW_WIDTH = 430;
-const BASE_WINDOW_HEIGHT = 1080;
 const PET_VISUAL_WIDTH = 350;
+const BASE_WINDOW_HEIGHT = Math.ceil(
+  (PET_VISUAL_WIDTH * getBuiltInPetSkin(DEFAULT_PET_SKIN_ID).assetHeight) /
+    getBuiltInPetSkin(DEFAULT_PET_SKIN_ID).assetWidth,
+);
 const MIN_SCALE = 0.3;
 const MAX_SCALE = 3;
 const SCALE_STEP = 0.05;
@@ -355,6 +359,7 @@ let skinPromptOverrides = readStoredStringRecord(PET_SKIN_PROMPTS_STORAGE_KEY);
 let favoritePetSkinIds = readStoredStringList(PET_FAVORITE_SKINS_STORAGE_KEY);
 let bodyMaskOverrides = readStoredBodyMasks();
 let interactionTools = readStoredInteractionTools();
+let currentBaseWindowHeight = BASE_WINDOW_HEIGHT;
 const hadStoredFavoritePetSkins = localStorage.getItem(PET_FAVORITE_SKINS_STORAGE_KEY) !== null;
 
 const state: PetState = {
@@ -895,10 +900,14 @@ function clampScale(scale: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, Number(scale.toFixed(2))));
 }
 
+function getPetVisualHeight(skin: PetSkinDefinition): number {
+  return (PET_VISUAL_WIDTH * skin.assetHeight) / skin.assetWidth;
+}
+
 function getWindowSizeForScale(scale: number): { width: number; height: number } {
   return {
     width: Math.round(BASE_WINDOW_WIDTH * scale),
-    height: Math.round(BASE_WINDOW_HEIGHT * scale),
+    height: Math.round(currentBaseWindowHeight * scale),
   };
 }
 
@@ -1251,7 +1260,9 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function applySkinVisuals(skin: PetSkinDefinition): void {
     activeSkin = skin;
-    const petVisualHeight = (PET_VISUAL_WIDTH * skin.assetHeight) / skin.assetWidth;
+    const petVisualHeight = getPetVisualHeight(skin);
+    currentBaseWindowHeight = Math.ceil(petVisualHeight);
+    document.documentElement.style.setProperty("--window-base-height", `${currentBaseWindowHeight}px`);
     petRoot.dataset.skinLayout = skin.layout;
     petStage.style.setProperty("--pet-aspect-height", String(skin.assetHeight / skin.assetWidth));
     petStage.style.setProperty("--pet-visual-width", `${PET_VISUAL_WIDTH}px`);
@@ -1865,6 +1876,14 @@ window.addEventListener("DOMContentLoaded", () => {
     state.selectedSkinId = skin.id;
     applySkinVisuals(skin);
     loadMaskEditorForSkin(skin);
+    if (!IS_MASK_EDITOR_WINDOW) {
+      void applyScale(state.scale, {
+        persist: false,
+        showBubble: false,
+        ensureDocked: state.dockedToCorner,
+        forceResize: true,
+      });
+    }
 
     if (options.persist ?? true) {
       localStorage.setItem(PET_SKIN_STORAGE_KEY, skin.id);
@@ -3078,6 +3097,7 @@ window.addEventListener("DOMContentLoaded", () => {
     const persist = options.persist ?? true;
     const showBubble = options.showBubble ?? true;
     const ensureDocked = options.ensureDocked ?? false;
+    const forceResize = options.forceResize ?? false;
     const normalizedScale = clampScale(nextScale);
     const scaleChanged = normalizedScale !== state.scale;
 
@@ -3092,7 +3112,7 @@ window.addEventListener("DOMContentLoaded", () => {
     const { width, height } = getWindowSizeForScale(normalizedScale);
 
     try {
-      if (scaleChanged) {
+      if (scaleChanged || forceResize) {
         await resizePetWindow(width, height);
       }
 
