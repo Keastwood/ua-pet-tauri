@@ -910,8 +910,8 @@ function getPetTransparentTop(skin: PetSkinDefinition): number {
   return (PET_VISUAL_WIDTH * (skin.transparentTop ?? 0)) / skin.assetWidth;
 }
 
-function getPetVisibleHeight(skin: PetSkinDefinition): number {
-  return Math.max(1, getPetVisualHeight(skin) - getPetTransparentTop(skin));
+function getPetVisibleHeightForTransparentTop(skin: PetSkinDefinition, transparentTop: number): number {
+  return Math.max(1, getPetVisualHeight(skin) - transparentTop);
 }
 
 function getWindowSizeForScale(scale: number): { width: number; height: number } {
@@ -1074,6 +1074,7 @@ window.addEventListener("DOMContentLoaded", () => {
   let maskEditorParts = cloneBodyMaskParts(getBodyMasksForSkin(activeSkin));
   let selectedMaskPartId = maskEditorParts[0]?.id ?? "";
   let selectedMaskTool: MaskTool = "move";
+  let skinMetricsRequestId = 0;
   let activeMaskPointerId: number | null = null;
   let activeMaskStroke: BodyMaskStroke | null = null;
   let activeLassoPoints: MaskPoint[] = [];
@@ -1268,19 +1269,93 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function applySkinVisuals(skin: PetSkinDefinition): void {
-    activeSkin = skin;
+  function applySkinVisualMetrics(skin: PetSkinDefinition, transparentTop = getPetTransparentTop(skin)): void {
     const petVisualHeight = getPetVisualHeight(skin);
-    const petTransparentTop = getPetTransparentTop(skin);
-    const petVisibleHeight = getPetVisibleHeight(skin);
+    const petTransparentTop = Math.max(0, Math.min(petVisualHeight - 1, transparentTop));
+    const petVisibleHeight = getPetVisibleHeightForTransparentTop(skin, petTransparentTop);
     currentBaseWindowHeight = Math.ceil(petVisibleHeight + PET_WINDOW_TOP_RESERVE);
     document.documentElement.style.setProperty("--window-base-height", `${currentBaseWindowHeight}px`);
-    petRoot.dataset.skinLayout = skin.layout;
     petStage.style.setProperty("--pet-aspect-height", String(skin.assetHeight / skin.assetWidth));
     petStage.style.setProperty("--pet-visual-width", `${PET_VISUAL_WIDTH}px`);
     petStage.style.setProperty("--pet-visual-height", `${petVisualHeight}px`);
     petStage.style.setProperty("--pet-visible-height", `${petVisibleHeight}px`);
     petStage.style.setProperty("--pet-transparent-top", `${petTransparentTop}px`);
+  }
+
+  function detectLoadedImageTransparentTop(image: HTMLImageElement): number | null {
+    const width = image.naturalWidth;
+    const height = image.naturalHeight;
+    if (width <= 0 || height <= 0) {
+      return null;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) {
+      return null;
+    }
+
+    try {
+      context.drawImage(image, 0, 0);
+      const { data } = context.getImageData(0, 0, width, height);
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          if (data[(y * width + x) * 4 + 3] > 8) {
+            return (PET_VISUAL_WIDTH * y) / width;
+          }
+        }
+      }
+    } catch (error) {
+      console.warn("Failed to inspect pet transparent top:", error);
+    }
+
+    return null;
+  }
+
+  async function refineSkinMetricsFromLoadedImage(skin: PetSkinDefinition, requestId: number): Promise<void> {
+    try {
+      if (!baseLayer.complete) {
+        await baseLayer.decode();
+      }
+    } catch {
+      // Natural size is still available for many decoded-error cases; continue to best-effort detection.
+    }
+
+    if (requestId !== skinMetricsRequestId || activeSkin.id !== skin.id) {
+      return;
+    }
+
+    const detectedTransparentTop = detectLoadedImageTransparentTop(baseLayer);
+    if (detectedTransparentTop === null) {
+      return;
+    }
+
+    const configuredTransparentTop = getPetTransparentTop(skin);
+    if (Math.abs(detectedTransparentTop - configuredTransparentTop) < 1) {
+      return;
+    }
+
+    applySkinVisualMetrics(skin, detectedTransparentTop);
+    if (!IS_MASK_EDITOR_WINDOW) {
+      void applyScale(state.scale, {
+        persist: false,
+        showBubble: false,
+        ensureDocked: state.dockedToCorner,
+        forceResize: true,
+      });
+    }
+    if (bubble.dataset.show === "true") {
+      window.requestAnimationFrame(positionBubble);
+    }
+  }
+
+  function applySkinVisuals(skin: PetSkinDefinition): void {
+    activeSkin = skin;
+    const requestId = ++skinMetricsRequestId;
+    applySkinVisualMetrics(skin);
+    petRoot.dataset.skinLayout = skin.layout;
     petRoot.style.setProperty("--mouth-mask-x", skin.layout === "fullBody" ? "51%" : "50.4%");
     petRoot.style.setProperty("--mouth-mask-y", skin.layout === "fullBody" ? "37.4%" : "42.7%");
     petRoot.style.setProperty("--mouth-mask-width", skin.layout === "fullBody" ? "8.8%" : "9.8%");
@@ -1289,6 +1364,7 @@ window.addEventListener("DOMContentLoaded", () => {
     talkLayer.src = skin.images.mouthTalk;
     mouthOLayer.src = skin.images.mouthO;
     setBaseExpression(state.surprised ? "surprised" : "idle");
+    void refineSkinMetricsFromLoadedImage(skin, requestId);
     preloadSkin(skin);
   }
 
