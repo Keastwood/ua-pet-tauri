@@ -257,6 +257,7 @@ const MAX_SCALE = 3;
 const SCALE_STEP = 0.05;
 const INTERACTIVE_DRAG_DELAY_MS = 180;
 const INTERACTIVE_DRAG_DISTANCE_PX = 7;
+const POINTER_PASSTHROUGH_INTERVAL_MS = 80;
 const SCALE_STORAGE_KEY = "silver-pet.scale.v2";
 const SCENE_MODE_STORAGE_KEY = "silver-pet.scene-mode.v1";
 const LLM_INTERACTION_MODE_STORAGE_KEY = "silver-pet.llm-interaction-mode.v1";
@@ -946,6 +947,14 @@ async function getPetWindowPosition(): Promise<WindowPosition> {
   return invoke<WindowPosition>("get_pet_window_position");
 }
 
+async function getPetCursorPosition(): Promise<WindowPosition> {
+  return invoke<WindowPosition>("get_pet_cursor_position");
+}
+
+async function setPetIgnoreCursorEvents(ignore: boolean): Promise<void> {
+  await invoke("set_pet_ignore_cursor_events", { ignore });
+}
+
 async function openMaskEditorWindow(): Promise<void> {
   await invoke("open_mask_editor");
 }
@@ -965,6 +974,7 @@ window.addEventListener("DOMContentLoaded", () => {
   const petRoot = must<HTMLDivElement>("#pet");
   const petStage = must<HTMLDivElement>("#pet-stage");
   const petFrame = must<HTMLDivElement>("#pet-frame");
+  const sideDock = must<HTMLElement>(".side-dock");
   const bubble = must<HTMLDivElement>("#bubble");
   const settingsPanel = must<HTMLElement>("#settings-panel");
   const historyPanel = must<HTMLElement>("#history-panel");
@@ -1065,6 +1075,7 @@ window.addEventListener("DOMContentLoaded", () => {
   const mouthOLayer = must<HTMLImageElement>("#mouth-o-layer");
   let llmRequestId = 0;
   let activeSkin = findPetSkin(state.selectedSkinId);
+  let currentPetTransparentTop = getPetTransparentTop(activeSkin);
   let voiceRecognition: SpeechRecognitionLike | null = null;
   let voiceRecognitionId = 0;
   let voiceRestartTimer: number | undefined;
@@ -1075,6 +1086,9 @@ window.addEventListener("DOMContentLoaded", () => {
   let selectedMaskPartId = maskEditorParts[0]?.id ?? "";
   let selectedMaskTool: MaskTool = "move";
   let skinMetricsRequestId = 0;
+  let petAlphaMask: ImageData | null = null;
+  let pointerPassthrough = false;
+  let pointerPassthroughBusy = false;
   let activeMaskPointerId: number | null = null;
   let activeMaskStroke: BodyMaskStroke | null = null;
   let activeLassoPoints: MaskPoint[] = [];
@@ -1273,6 +1287,7 @@ window.addEventListener("DOMContentLoaded", () => {
     const petVisualHeight = getPetVisualHeight(skin);
     const petTransparentTop = Math.max(0, Math.min(petVisualHeight - 1, transparentTop));
     const petVisibleHeight = getPetVisibleHeightForTransparentTop(skin, petTransparentTop);
+    currentPetTransparentTop = petTransparentTop;
     currentBaseWindowHeight = Math.ceil(petVisibleHeight + PET_WINDOW_TOP_RESERVE);
     document.documentElement.style.setProperty("--window-base-height", `${currentBaseWindowHeight}px`);
     petStage.style.setProperty("--pet-aspect-height", String(skin.assetHeight / skin.assetWidth));
@@ -1282,7 +1297,7 @@ window.addEventListener("DOMContentLoaded", () => {
     petStage.style.setProperty("--pet-transparent-top", `${petTransparentTop}px`);
   }
 
-  function detectLoadedImageTransparentTop(image: HTMLImageElement): number | null {
+  function getLoadedPetImageData(image: HTMLImageElement): ImageData | null {
     const width = image.naturalWidth;
     const height = image.naturalHeight;
     if (width <= 0 || height <= 0) {
@@ -1299,16 +1314,21 @@ window.addEventListener("DOMContentLoaded", () => {
 
     try {
       context.drawImage(image, 0, 0);
-      const { data } = context.getImageData(0, 0, width, height);
-      for (let y = 0; y < height; y += 1) {
-        for (let x = 0; x < width; x += 1) {
-          if (data[(y * width + x) * 4 + 3] > 8) {
-            return (PET_VISUAL_WIDTH * y) / width;
-          }
-        }
-      }
+      return context.getImageData(0, 0, width, height);
     } catch (error) {
       console.warn("Failed to inspect pet transparent top:", error);
+    }
+
+    return null;
+  }
+
+  function detectLoadedImageTransparentTop(imageData: ImageData): number | null {
+    for (let y = 0; y < imageData.height; y += 1) {
+      for (let x = 0; x < imageData.width; x += 1) {
+        if (imageData.data[(y * imageData.width + x) * 4 + 3] > 0) {
+          return (PET_VISUAL_WIDTH * y) / imageData.width;
+        }
+      }
     }
 
     return null;
@@ -1327,7 +1347,13 @@ window.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    const detectedTransparentTop = detectLoadedImageTransparentTop(baseLayer);
+    const imageData = getLoadedPetImageData(baseLayer);
+    petAlphaMask = imageData;
+    if (!imageData) {
+      return;
+    }
+
+    const detectedTransparentTop = detectLoadedImageTransparentTop(imageData);
     if (detectedTransparentTop === null) {
       return;
     }
@@ -1354,6 +1380,7 @@ window.addEventListener("DOMContentLoaded", () => {
   function applySkinVisuals(skin: PetSkinDefinition): void {
     activeSkin = skin;
     const requestId = ++skinMetricsRequestId;
+    petAlphaMask = null;
     applySkinVisualMetrics(skin);
     petRoot.dataset.skinLayout = skin.layout;
     petRoot.style.setProperty("--mouth-mask-x", skin.layout === "fullBody" ? "51%" : "50.4%");
@@ -2554,6 +2581,87 @@ window.addEventListener("DOMContentLoaded", () => {
     }, duration);
   }
 
+  function isPointInsideRect(point: WindowPosition, rect: DOMRect): boolean {
+    return point.x >= rect.left && point.x <= rect.right && point.y >= rect.top && point.y <= rect.bottom;
+  }
+
+  function isElementVisible(element: HTMLElement): boolean {
+    return !element.hidden && element.offsetParent !== null;
+  }
+
+  function isPointOverElement(point: WindowPosition, element: HTMLElement): boolean {
+    return isElementVisible(element) && isPointInsideRect(point, element.getBoundingClientRect());
+  }
+
+  function isPointOverVisiblePetPixel(point: WindowPosition): boolean {
+    if (!petAlphaMask) {
+      return isPointInsideRect(point, petRoot.getBoundingClientRect());
+    }
+
+    const rect = petRoot.getBoundingClientRect();
+    if (!isPointInsideRect(point, rect)) {
+      return false;
+    }
+
+    const displayScale = rect.width / PET_VISUAL_WIDTH;
+    if (!Number.isFinite(displayScale) || displayScale <= 0) {
+      return false;
+    }
+
+    const sourceX = Math.floor(((point.x - rect.left) / rect.width) * petAlphaMask.width);
+    const sourceY = Math.floor(
+      ((point.y - rect.top + currentPetTransparentTop * displayScale) / (getPetVisualHeight(activeSkin) * displayScale)) *
+        petAlphaMask.height,
+    );
+
+    if (sourceX < 0 || sourceY < 0 || sourceX >= petAlphaMask.width || sourceY >= petAlphaMask.height) {
+      return false;
+    }
+
+    return petAlphaMask.data[(sourceY * petAlphaMask.width + sourceX) * 4 + 3] > 8;
+  }
+
+  function shouldCaptureCursorAt(point: WindowPosition): boolean {
+    if (IS_MASK_EDITOR_WINDOW || pendingInteractiveDrag?.dragging) {
+      return true;
+    }
+
+    if (
+      !settingsPanel.hidden ||
+      !historyPanel.hidden ||
+      !floatingInput.hidden ||
+      isPointOverElement(point, sideDock)
+    ) {
+      return true;
+    }
+
+    return isPointOverVisiblePetPixel(point);
+  }
+
+  async function syncPointerPassthrough(): Promise<void> {
+    if (IS_MASK_EDITOR_WINDOW || pointerPassthroughBusy) {
+      return;
+    }
+
+    pointerPassthroughBusy = true;
+    try {
+      const position = await getPetCursorPosition();
+      const shouldIgnore = !shouldCaptureCursorAt(position);
+      if (shouldIgnore !== pointerPassthrough) {
+        await setPetIgnoreCursorEvents(shouldIgnore);
+        pointerPassthrough = shouldIgnore;
+      }
+    } catch (error) {
+      if (pointerPassthrough) {
+        await setPetIgnoreCursorEvents(false).catch(() => undefined);
+        pointerPassthrough = false;
+      }
+      console.warn("Failed to sync pointer passthrough:", error);
+    } finally {
+      pointerPassthroughBusy = false;
+    }
+  }
+
   function getMoodLabel(): string {
     if (state.surprised) {
       return "受惊";
@@ -2654,6 +2762,7 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function openSettings(): void {
+    forceCaptureCursorEvents();
     if (IS_MASK_EDITOR_WINDOW) {
       settingsPanel.hidden = false;
       settingsPanel.dataset.show = "true";
@@ -2956,6 +3065,7 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function openHistory(): void {
+    forceCaptureCursorEvents();
     historyPanel.hidden = false;
     historyPanel.dataset.show = "true";
     void refreshHistory();
@@ -2982,6 +3092,7 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function openFloatingInput(): void {
+    forceCaptureCursorEvents();
     floatingInput.hidden = false;
     floatingInput.dataset.show = "true";
     floatingInputHint.textContent = "Enter 发送，Esc 收起。";
@@ -3401,6 +3512,16 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function forceCaptureCursorEvents(): void {
+    if (!pointerPassthrough) {
+      return;
+    }
+    pointerPassthrough = false;
+    void setPetIgnoreCursorEvents(false).catch((error) => {
+      console.warn("Failed to restore cursor events:", error);
+    });
+  }
+
   function clearPendingInteractiveDrag(): void {
     clearTimer(pendingInteractiveDrag?.timer);
     pendingInteractiveDrag = null;
@@ -3453,6 +3574,7 @@ window.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    forceCaptureCursorEvents();
     clearPendingInteractiveDrag();
     pendingInteractiveDrag = {
       pointerId: event.pointerId,
@@ -4047,6 +4169,12 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   if (!IS_MASK_EDITOR_WINDOW) {
+    window.setInterval(() => {
+      void syncPointerPassthrough();
+    }, POINTER_PASSTHROUGH_INTERVAL_MS);
+    window.addEventListener("beforeunload", () => {
+      forceCaptureCursorEvents();
+    });
     setBubble("可以拖动我，也可以用滚轮或 +/- 调整大小。", "hint", 3400);
     scheduleBlink();
     startIdleChatter();

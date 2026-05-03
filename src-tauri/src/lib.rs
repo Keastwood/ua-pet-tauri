@@ -1449,6 +1449,18 @@ fn get_pet_window_position(window: Window) -> Result<WindowPosition, String> {
 }
 
 #[tauri::command]
+fn get_pet_cursor_position(window: Window) -> Result<WindowPosition, String> {
+    let scale_factor = window.scale_factor().map_err(|error| error.to_string())?;
+    let window_position = window.outer_position().map_err(|error| error.to_string())?;
+    let cursor_position = window.cursor_position().map_err(|error| error.to_string())?;
+
+    Ok(WindowPosition {
+        x: (cursor_position.x - f64::from(window_position.x)) / scale_factor,
+        y: (cursor_position.y - f64::from(window_position.y)) / scale_factor,
+    })
+}
+
+#[tauri::command]
 fn resize_pet_window(window: Window, width: f64, height: f64) -> Result<(), String> {
     let scale_factor = window.scale_factor().map_err(|error| error.to_string())?;
     let outer_position = window.outer_position().map_err(|error| error.to_string())?;
@@ -1475,6 +1487,13 @@ fn resize_pet_window(window: Window, width: f64, height: f64) -> Result<(), Stri
 fn set_pet_always_on_top(window: Window, always_on_top: bool) -> Result<(), String> {
     window
         .set_always_on_top(always_on_top)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_pet_ignore_cursor_events(window: Window, ignore: bool) -> Result<(), String> {
+    window
+        .set_ignore_cursor_events(ignore)
         .map_err(|error| error.to_string())
 }
 
@@ -1546,6 +1565,7 @@ pub fn run() {
             delete_custom_skin,
             get_llm_config,
             get_interaction_history,
+            get_pet_cursor_position,
             get_pet_window_position,
             list_custom_skins,
             llm_chat,
@@ -1557,6 +1577,7 @@ pub fn run() {
             open_mask_editor,
             resize_pet_window,
             set_pet_always_on_top,
+            set_pet_ignore_cursor_events,
             close_pet
         ])
         .run(tauri::generate_context!())
