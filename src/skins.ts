@@ -15,6 +15,7 @@ const DEFAULT_SKIN: PetSkinDefinition = {
   assetWidth: 1170,
   assetHeight: 2532,
   hitCalibrationY: 7.2,
+  transparentTop: 238,
   images: {
     idle: idleBase,
     surprised: surpriseBase,

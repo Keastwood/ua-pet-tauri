@@ -15,5 +15,6 @@ export interface PetSkinDefinition {
   assetWidth: number;
   assetHeight: number;
   hitCalibrationY?: number;
+  transparentTop?: number;
   images: PetSkinImages;
 }

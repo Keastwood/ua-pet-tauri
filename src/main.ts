@@ -246,10 +246,12 @@ declare global {
 
 const BASE_WINDOW_WIDTH = 430;
 const PET_VISUAL_WIDTH = 350;
+const PET_WINDOW_TOP_RESERVE = 32;
+const DEFAULT_WINDOW_SKIN = getBuiltInPetSkin(DEFAULT_PET_SKIN_ID);
 const BASE_WINDOW_HEIGHT = Math.ceil(
-  (PET_VISUAL_WIDTH * getBuiltInPetSkin(DEFAULT_PET_SKIN_ID).assetHeight) /
-    getBuiltInPetSkin(DEFAULT_PET_SKIN_ID).assetWidth,
-);
+  (PET_VISUAL_WIDTH * (DEFAULT_WINDOW_SKIN.assetHeight - (DEFAULT_WINDOW_SKIN.transparentTop ?? 0))) /
+    DEFAULT_WINDOW_SKIN.assetWidth,
+) + PET_WINDOW_TOP_RESERVE;
 const MIN_SCALE = 0.3;
 const MAX_SCALE = 3;
 const SCALE_STEP = 0.05;
@@ -904,6 +906,14 @@ function getPetVisualHeight(skin: PetSkinDefinition): number {
   return (PET_VISUAL_WIDTH * skin.assetHeight) / skin.assetWidth;
 }
 
+function getPetTransparentTop(skin: PetSkinDefinition): number {
+  return (PET_VISUAL_WIDTH * (skin.transparentTop ?? 0)) / skin.assetWidth;
+}
+
+function getPetVisibleHeight(skin: PetSkinDefinition): number {
+  return Math.max(1, getPetVisualHeight(skin) - getPetTransparentTop(skin));
+}
+
 function getWindowSizeForScale(scale: number): { width: number; height: number } {
   return {
     width: Math.round(BASE_WINDOW_WIDTH * scale),
@@ -1261,12 +1271,16 @@ window.addEventListener("DOMContentLoaded", () => {
   function applySkinVisuals(skin: PetSkinDefinition): void {
     activeSkin = skin;
     const petVisualHeight = getPetVisualHeight(skin);
-    currentBaseWindowHeight = Math.ceil(petVisualHeight);
+    const petTransparentTop = getPetTransparentTop(skin);
+    const petVisibleHeight = getPetVisibleHeight(skin);
+    currentBaseWindowHeight = Math.ceil(petVisibleHeight + PET_WINDOW_TOP_RESERVE);
     document.documentElement.style.setProperty("--window-base-height", `${currentBaseWindowHeight}px`);
     petRoot.dataset.skinLayout = skin.layout;
     petStage.style.setProperty("--pet-aspect-height", String(skin.assetHeight / skin.assetWidth));
     petStage.style.setProperty("--pet-visual-width", `${PET_VISUAL_WIDTH}px`);
     petStage.style.setProperty("--pet-visual-height", `${petVisualHeight}px`);
+    petStage.style.setProperty("--pet-visible-height", `${petVisibleHeight}px`);
+    petStage.style.setProperty("--pet-transparent-top", `${petTransparentTop}px`);
     petRoot.style.setProperty("--mouth-mask-x", skin.layout === "fullBody" ? "51%" : "50.4%");
     petRoot.style.setProperty("--mouth-mask-y", skin.layout === "fullBody" ? "37.4%" : "42.7%");
     petRoot.style.setProperty("--mouth-mask-width", skin.layout === "fullBody" ? "8.8%" : "9.8%");
