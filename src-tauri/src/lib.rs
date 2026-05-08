@@ -88,6 +88,14 @@ struct WindowPosition {
     y: f64,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CursorPosition {
+    x: f64,
+    y: f64,
+    candidates: Vec<WindowPosition>,
+}
+
 #[derive(Debug, Clone)]
 struct EffectiveLlmConfig {
     api_key: String,
@@ -1449,14 +1457,39 @@ fn get_pet_window_position(window: Window) -> Result<WindowPosition, String> {
 }
 
 #[tauri::command]
-fn get_pet_cursor_position(window: Window) -> Result<WindowPosition, String> {
+fn get_pet_cursor_position(window: Window) -> Result<CursorPosition, String> {
     let scale_factor = window.scale_factor().map_err(|error| error.to_string())?;
     let window_position = window.outer_position().map_err(|error| error.to_string())?;
+    let window_size = window.outer_size().map_err(|error| error.to_string())?;
     let cursor_position = window.cursor_position().map_err(|error| error.to_string())?;
 
-    Ok(WindowPosition {
+    let physical_relative = WindowPosition {
         x: (cursor_position.x - f64::from(window_position.x)) / scale_factor,
         y: (cursor_position.y - f64::from(window_position.y)) / scale_factor,
+    };
+    let logical_relative = WindowPosition {
+        x: cursor_position.x - f64::from(window_position.x) / scale_factor,
+        y: cursor_position.y - f64::from(window_position.y) / scale_factor,
+    };
+    let raw_relative = WindowPosition {
+        x: cursor_position.x - f64::from(window_position.x),
+        y: cursor_position.y - f64::from(window_position.y),
+    };
+    let window_width = f64::from(window_size.width) / scale_factor;
+    let window_height = f64::from(window_size.height) / scale_factor;
+    let primary_is_plausible = physical_relative.x >= -32.0
+        && physical_relative.x <= window_width + 32.0
+        && physical_relative.y >= -32.0
+        && physical_relative.y <= window_height + 32.0;
+
+    Ok(CursorPosition {
+        x: physical_relative.x,
+        y: physical_relative.y,
+        candidates: if primary_is_plausible {
+            Vec::new()
+        } else {
+            vec![logical_relative, raw_relative]
+        },
     })
 }
 
