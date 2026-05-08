@@ -16,6 +16,8 @@
   --app-scale: 1;
   --app-ui-scale: 1;
   --window-base-height: 854px;
+  --side-dock-width: 58px;
+  --pet-stage-shift: -40px;
 }
 
 * {
@@ -620,6 +622,7 @@ button {
   justify-content: flex-end;
   align-items: center;
   overflow: visible;
+  transform: translateX(var(--pet-stage-shift));
 }
 
 .pet-frame {
@@ -1461,8 +1464,8 @@ body[data-view="mask-editor"] .mask-editor__stage {
   top: auto;
   right: 0;
   bottom: 36px;
-  width: 46px;
-  max-width: 46px;
+  width: var(--side-dock-width);
+  max-width: var(--side-dock-width);
   gap: 6px;
   justify-items: center;
 }
@@ -1471,9 +1474,9 @@ body[data-view="mask-editor"] .mask-editor__stage {
   content: "";
   position: absolute;
   top: -10px;
-  right: -4px;
+  right: 0;
   bottom: -10px;
-  width: 58px;
+  width: var(--side-dock-width);
   border-left: 1px solid rgba(74, 126, 162, 0.24);
   border-radius: 24px 0 0 24px;
   background:
@@ -1532,7 +1535,7 @@ body[data-view="mask-editor"] .mask-editor__stage {
 
 .side-dock .skin-switcher__extras {
   position: absolute;
-  right: 42px;
+  right: 54px;
   bottom: -5px;
   display: grid;
   grid-template-columns: repeat(4, 34px);

@@ -86,14 +86,38 @@ struct LlmConfigView {
 struct WindowPosition {
     x: f64,
     y: f64,
+    window_width: Option<f64>,
+    physical_x: Option<f64>,
+    physical_y: Option<f64>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CursorPosition {
-    x: f64,
-    y: f64,
-    candidates: Vec<WindowPosition>,
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct WinPoint {
+    x: i32,
+    y: i32,
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "user32")]
+extern "system" {
+    fn GetCursorPos(point: *mut WinPoint) -> i32;
+}
+
+#[cfg(target_os = "windows")]
+fn global_cursor_position_physical() -> Option<(f64, f64)> {
+    let mut point = WinPoint { x: 0, y: 0 };
+    let ok = unsafe { GetCursorPos(&mut point) };
+    if ok == 0 {
+        None
+    } else {
+        Some((f64::from(point.x), f64::from(point.y)))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn global_cursor_position_physical() -> Option<(f64, f64)> {
+    None
 }
 
 #[derive(Debug, Clone)]
@@ -1453,43 +1477,25 @@ fn get_pet_window_position(window: Window) -> Result<WindowPosition, String> {
     Ok(WindowPosition {
         x: position.x as f64 / scale_factor,
         y: position.y as f64 / scale_factor,
+        window_width: None,
+        physical_x: None,
+        physical_y: None,
     })
 }
 
 #[tauri::command]
-fn get_pet_cursor_position(window: Window) -> Result<CursorPosition, String> {
+fn get_pet_cursor_position(window: Window) -> Result<WindowPosition, String> {
     let scale_factor = window.scale_factor().map_err(|error| error.to_string())?;
     let window_position = window.outer_position().map_err(|error| error.to_string())?;
     let window_size = window.outer_size().map_err(|error| error.to_string())?;
     let cursor_position = window.cursor_position().map_err(|error| error.to_string())?;
-
-    let physical_relative = WindowPosition {
+    let physical_position = global_cursor_position_physical();
+    Ok(WindowPosition {
         x: (cursor_position.x - f64::from(window_position.x)) / scale_factor,
         y: (cursor_position.y - f64::from(window_position.y)) / scale_factor,
-    };
-    let logical_relative = WindowPosition {
-        x: cursor_position.x - f64::from(window_position.x) / scale_factor,
-        y: cursor_position.y - f64::from(window_position.y) / scale_factor,
-    };
-    let raw_relative = WindowPosition {
-        x: cursor_position.x - f64::from(window_position.x),
-        y: cursor_position.y - f64::from(window_position.y),
-    };
-    let window_width = f64::from(window_size.width) / scale_factor;
-    let window_height = f64::from(window_size.height) / scale_factor;
-    let primary_is_plausible = physical_relative.x >= -32.0
-        && physical_relative.x <= window_width + 32.0
-        && physical_relative.y >= -32.0
-        && physical_relative.y <= window_height + 32.0;
-
-    Ok(CursorPosition {
-        x: physical_relative.x,
-        y: physical_relative.y,
-        candidates: if primary_is_plausible {
-            Vec::new()
-        } else {
-            vec![logical_relative, raw_relative]
-        },
+        window_width: Some(f64::from(window_size.width)),
+        physical_x: physical_position.map(|(x, _)| x - f64::from(window_position.x)),
+        physical_y: physical_position.map(|(_, y)| y - f64::from(window_position.y)),
     })
 }
 

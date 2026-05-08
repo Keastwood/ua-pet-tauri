@@ -52,10 +52,9 @@ interface ApplyScaleOptions {
 interface WindowPosition {
   x: number;
   y: number;
-}
-
-interface CursorPosition extends WindowPosition {
-  candidates?: WindowPosition[];
+  windowWidth?: number;
+  physicalX?: number;
+  physicalY?: number;
 }
 
 interface LlmMessage {
@@ -943,8 +942,8 @@ async function getPetWindowPosition(): Promise<WindowPosition> {
   return invoke<WindowPosition>("get_pet_window_position");
 }
 
-async function getPetCursorPosition(): Promise<CursorPosition> {
-  return invoke<CursorPosition>("get_pet_cursor_position");
+async function getPetCursorPosition(): Promise<WindowPosition> {
+  return invoke<WindowPosition>("get_pet_cursor_position");
 }
 
 async function setPetIgnoreCursorEvents(ignore: boolean): Promise<void> {
@@ -2540,12 +2539,31 @@ window.addEventListener("DOMContentLoaded", () => {
     );
   }
 
-  function isElementVisible(element: HTMLElement): boolean {
-    return !element.hidden && element.offsetParent !== null;
-  }
+  function isPointOverSideDock(point: WindowPosition): boolean {
+    const physicalX = point.physicalX;
+    const physicalY = point.physicalY;
+    const windowWidth = point.windowWidth;
+    if (
+      physicalX !== undefined &&
+      physicalY !== undefined &&
+      windowWidth !== undefined &&
+      Number.isFinite(physicalX) &&
+      Number.isFinite(physicalY) &&
+      Number.isFinite(windowWidth) &&
+      windowWidth > 0
+    ) {
+      const rect = sideDock.getBoundingClientRect();
+      if (rect.right > 0 && rect.width > 0) {
+        const cssToPhysical = windowWidth / rect.right;
+        const left = Math.floor(rect.left * cssToPhysical);
+        const right = Math.ceil(rect.right * cssToPhysical);
+        const top = Math.floor(rect.top * cssToPhysical);
+        const bottom = Math.ceil(rect.bottom * cssToPhysical);
+        return physicalX >= left && physicalX <= right && physicalY >= top && physicalY <= bottom;
+      }
+    }
 
-  function isPointOverElement(point: WindowPosition, element: HTMLElement, padding = 0): boolean {
-    return isElementVisible(element) && isPointInsideRect(point, element.getBoundingClientRect(), padding);
+    return isPointInsideRect(point, sideDock.getBoundingClientRect());
   }
 
   function isPointOverVisiblePetPixel(point: WindowPosition): boolean {
@@ -2577,7 +2595,7 @@ window.addEventListener("DOMContentLoaded", () => {
       !settingsPanel.hidden ||
       !historyPanel.hidden ||
       !floatingInput.hidden ||
-      isPointOverElement(point, sideDock, 18)
+      isPointOverSideDock(point)
     ) {
       return true;
     }
@@ -2593,14 +2611,7 @@ window.addEventListener("DOMContentLoaded", () => {
     pointerPassthroughBusy = true;
     try {
       const position = await getPetCursorPosition();
-      const cursorCandidates = [position, ...(position.candidates ?? [])].flatMap((candidate) => {
-        if (state.scale === 1) {
-          return [candidate];
-        }
-
-        return [candidate, { x: candidate.x / state.scale, y: candidate.y / state.scale }];
-      });
-      const shouldIgnore = !cursorCandidates.some(shouldCaptureCursorAt);
+      const shouldIgnore = !shouldCaptureCursorAt(position);
       if (shouldIgnore !== pointerPassthrough) {
         await setPetIgnoreCursorEvents(shouldIgnore);
         pointerPassthrough = shouldIgnore;
