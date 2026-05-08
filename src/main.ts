@@ -246,12 +246,12 @@ declare global {
 
 const BASE_WINDOW_WIDTH = 430;
 const PET_VISUAL_WIDTH = 350;
-const PET_WINDOW_TOP_RESERVE = 32;
-const DEFAULT_WINDOW_SKIN = getBuiltInPetSkin(DEFAULT_PET_SKIN_ID);
+const PET_WINDOW_TOP_RESERVE = 96;
 const BASE_WINDOW_HEIGHT = Math.ceil(
-  (PET_VISUAL_WIDTH * (DEFAULT_WINDOW_SKIN.assetHeight - (DEFAULT_WINDOW_SKIN.transparentTop ?? 0))) /
-    DEFAULT_WINDOW_SKIN.assetWidth,
-) + PET_WINDOW_TOP_RESERVE;
+  (PET_VISUAL_WIDTH * getBuiltInPetSkin(DEFAULT_PET_SKIN_ID).assetHeight) /
+    getBuiltInPetSkin(DEFAULT_PET_SKIN_ID).assetWidth +
+    PET_WINDOW_TOP_RESERVE,
+);
 const MIN_SCALE = 0.3;
 const MAX_SCALE = 3;
 const SCALE_STEP = 0.05;
@@ -282,7 +282,7 @@ const DEFAULT_INTERACTION_TOOLS: InteractionTool[] = [
   { id: "foot", label: "脚", verb: "踩", icon: "◒" },
   { id: "feather", label: "舌头", verb: "舔", icon: "〰" },
   { id: "comb", label: "鸡鸡", verb: "插入", icon: "▥" },
-  { id: "snack", label: "零食", verb: "投喂", icon: "◇" },
+  { id: "snack", label: "拳头", verb: "殴打", icon: "◇" },
 ];
 
 const HALF_BODY_HIT_AREA_RULES: PetHitAreaRule[] = [
@@ -907,14 +907,6 @@ function getPetVisualHeight(skin: PetSkinDefinition): number {
   return (PET_VISUAL_WIDTH * skin.assetHeight) / skin.assetWidth;
 }
 
-function getPetTransparentTop(skin: PetSkinDefinition): number {
-  return (PET_VISUAL_WIDTH * (skin.transparentTop ?? 0)) / skin.assetWidth;
-}
-
-function getPetVisibleHeightForTransparentTop(skin: PetSkinDefinition, transparentTop: number): number {
-  return Math.max(1, getPetVisualHeight(skin) - transparentTop);
-}
-
 function getWindowSizeForScale(scale: number): { width: number; height: number } {
   return {
     width: Math.round(BASE_WINDOW_WIDTH * scale),
@@ -1075,7 +1067,6 @@ window.addEventListener("DOMContentLoaded", () => {
   const mouthOLayer = must<HTMLImageElement>("#mouth-o-layer");
   let llmRequestId = 0;
   let activeSkin = findPetSkin(state.selectedSkinId);
-  let currentPetTransparentTop = getPetTransparentTop(activeSkin);
   let voiceRecognition: SpeechRecognitionLike | null = null;
   let voiceRecognitionId = 0;
   let voiceRestartTimer: number | undefined;
@@ -1283,18 +1274,13 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function applySkinVisualMetrics(skin: PetSkinDefinition, transparentTop = getPetTransparentTop(skin)): void {
+  function applySkinVisualMetrics(skin: PetSkinDefinition): void {
     const petVisualHeight = getPetVisualHeight(skin);
-    const petTransparentTop = Math.max(0, Math.min(petVisualHeight - 1, transparentTop));
-    const petVisibleHeight = getPetVisibleHeightForTransparentTop(skin, petTransparentTop);
-    currentPetTransparentTop = petTransparentTop;
-    currentBaseWindowHeight = Math.ceil(petVisibleHeight + PET_WINDOW_TOP_RESERVE);
+    currentBaseWindowHeight = Math.ceil(petVisualHeight + PET_WINDOW_TOP_RESERVE);
     document.documentElement.style.setProperty("--window-base-height", `${currentBaseWindowHeight}px`);
     petStage.style.setProperty("--pet-aspect-height", String(skin.assetHeight / skin.assetWidth));
     petStage.style.setProperty("--pet-visual-width", `${PET_VISUAL_WIDTH}px`);
     petStage.style.setProperty("--pet-visual-height", `${petVisualHeight}px`);
-    petStage.style.setProperty("--pet-visible-height", `${petVisibleHeight}px`);
-    petStage.style.setProperty("--pet-transparent-top", `${petTransparentTop}px`);
   }
 
   function getLoadedPetImageData(image: HTMLImageElement): ImageData | null {
@@ -1316,65 +1302,25 @@ window.addEventListener("DOMContentLoaded", () => {
       context.drawImage(image, 0, 0);
       return context.getImageData(0, 0, width, height);
     } catch (error) {
-      console.warn("Failed to inspect pet transparent top:", error);
+      console.warn("Failed to inspect pet alpha mask:", error);
+      return null;
     }
-
-    return null;
   }
 
-  function detectLoadedImageTransparentTop(imageData: ImageData): number | null {
-    for (let y = 0; y < imageData.height; y += 1) {
-      for (let x = 0; x < imageData.width; x += 1) {
-        if (imageData.data[(y * imageData.width + x) * 4 + 3] > 0) {
-          return (PET_VISUAL_WIDTH * y) / imageData.width;
-        }
-      }
-    }
-
-    return null;
-  }
-
-  async function refineSkinMetricsFromLoadedImage(skin: PetSkinDefinition, requestId: number): Promise<void> {
+  async function refreshPetAlphaMaskFromLoadedImage(skin: PetSkinDefinition, requestId: number): Promise<void> {
     try {
       if (!baseLayer.complete) {
         await baseLayer.decode();
       }
     } catch {
-      // Natural size is still available for many decoded-error cases; continue to best-effort detection.
+      // Natural size can still be readable after some decode failures.
     }
 
     if (requestId !== skinMetricsRequestId || activeSkin.id !== skin.id) {
       return;
     }
 
-    const imageData = getLoadedPetImageData(baseLayer);
-    petAlphaMask = imageData;
-    if (!imageData) {
-      return;
-    }
-
-    const detectedTransparentTop = detectLoadedImageTransparentTop(imageData);
-    if (detectedTransparentTop === null) {
-      return;
-    }
-
-    const configuredTransparentTop = getPetTransparentTop(skin);
-    if (Math.abs(detectedTransparentTop - configuredTransparentTop) < 1) {
-      return;
-    }
-
-    applySkinVisualMetrics(skin, detectedTransparentTop);
-    if (!IS_MASK_EDITOR_WINDOW) {
-      void applyScale(state.scale, {
-        persist: false,
-        showBubble: false,
-        ensureDocked: state.dockedToCorner,
-        forceResize: true,
-      });
-    }
-    if (bubble.dataset.show === "true") {
-      window.requestAnimationFrame(positionBubble);
-    }
+    petAlphaMask = getLoadedPetImageData(baseLayer);
   }
 
   function applySkinVisuals(skin: PetSkinDefinition): void {
@@ -1391,7 +1337,7 @@ window.addEventListener("DOMContentLoaded", () => {
     talkLayer.src = skin.images.mouthTalk;
     mouthOLayer.src = skin.images.mouthO;
     setBaseExpression(state.surprised ? "surprised" : "idle");
-    void refineSkinMetricsFromLoadedImage(skin, requestId);
+    void refreshPetAlphaMaskFromLoadedImage(skin, requestId);
     preloadSkin(skin);
   }
 
@@ -2594,25 +2540,17 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function isPointOverVisiblePetPixel(point: WindowPosition): boolean {
-    if (!petAlphaMask) {
-      return isPointInsideRect(point, petRoot.getBoundingClientRect());
-    }
-
     const rect = petRoot.getBoundingClientRect();
     if (!isPointInsideRect(point, rect)) {
       return false;
     }
 
-    const displayScale = rect.width / PET_VISUAL_WIDTH;
-    if (!Number.isFinite(displayScale) || displayScale <= 0) {
-      return false;
+    if (!petAlphaMask) {
+      return true;
     }
 
     const sourceX = Math.floor(((point.x - rect.left) / rect.width) * petAlphaMask.width);
-    const sourceY = Math.floor(
-      ((point.y - rect.top + currentPetTransparentTop * displayScale) / (getPetVisualHeight(activeSkin) * displayScale)) *
-        petAlphaMask.height,
-    );
+    const sourceY = Math.floor(((point.y - rect.top) / rect.height) * petAlphaMask.height);
 
     if (sourceX < 0 || sourceY < 0 || sourceX >= petAlphaMask.width || sourceY >= petAlphaMask.height) {
       return false;

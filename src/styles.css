@@ -15,7 +15,7 @@
   --accent-deep: #3d6f96;
   --app-scale: 1;
   --app-ui-scale: 1;
-  --window-base-height: 719px;
+  --window-base-height: 854px;
 }
 
 * {
@@ -614,21 +614,23 @@ button {
 .pet-stage {
   position: relative;
   width: var(--pet-visual-width, 350px);
-  min-height: var(--pet-visible-height, var(--pet-visual-height, 758px));
+  min-height: var(--pet-visual-height, 758px);
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
   align-items: center;
+  overflow: visible;
 }
 
 .pet-frame {
   position: relative;
   width: var(--pet-visual-width, 350px);
-  height: var(--pet-visible-height, var(--pet-visual-height, 758px));
+  height: var(--pet-visual-height, 758px);
   display: flex;
   align-items: flex-end;
   justify-content: center;
   isolation: isolate;
+  overflow: visible;
 }
 
 .pet::before,
@@ -701,8 +703,8 @@ button {
   position: relative;
   z-index: 3;
   width: var(--pet-visual-width, 350px);
-  height: var(--pet-visible-height, var(--pet-visual-height, 758px));
-  overflow: hidden;
+  height: var(--pet-visual-height, 758px);
+  overflow: visible;
   isolation: isolate;
   transform-origin: 50% 92%;
   animation: drift 4.8s ease-in-out infinite;
@@ -721,10 +723,9 @@ button {
 .pet-image,
 .pet-overlay {
   position: absolute;
-  top: calc(-1 * var(--pet-transparent-top, 0px));
-  left: 0;
+  inset: 0;
   width: 100%;
-  height: var(--pet-visual-height, 758px);
+  height: 100%;
   object-fit: contain;
   object-position: center bottom;
   pointer-events: none;
@@ -1096,12 +1097,12 @@ button {
 }
 
 .pet-stage {
-  min-height: var(--pet-visible-height, var(--pet-visual-height, 758px));
+  min-height: var(--pet-visual-height, 758px);
   justify-content: center;
 }
 
 .pet-frame {
-  height: var(--pet-visible-height, var(--pet-visual-height, 758px));
+  height: var(--pet-visual-height, 758px);
 }
 
 .note {
