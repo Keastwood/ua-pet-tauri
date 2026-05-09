@@ -961,6 +961,10 @@ function setCssScale(scale: number): void {
   document.documentElement.style.setProperty("--app-ui-scale", String(1 / scale));
 }
 
+function distanceBetweenPoints(left: { x: number; y: number }, right: { x: number; y: number }): number {
+  return Math.hypot(left.x - right.x, left.y - right.y);
+}
+
 async function movePetWindow(x: number, y: number): Promise<void> {
   if (IS_MOBILE_PET_WINDOW) {
     return;
@@ -1183,6 +1187,9 @@ window.addEventListener("DOMContentLoaded", () => {
   let dragMaskSnapshot: BodyMaskPart | null = null;
   let dragMaskStartPoint: MaskPoint | null = null;
   let activeMaskMoveMode: "move" | "scale" | null = null;
+  const mobileScalePointers = new Map<number, MaskPoint>();
+  let mobileScaleGestureStartDistance = 0;
+  let mobileScaleGestureStartScale = 1;
 
   if (IS_MOBILE_PET_WINDOW) {
     document.addEventListener(
@@ -3129,20 +3136,26 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function getPetImagePointFromClient(clientX: number, clientY: number): MaskPoint | null {
     const frameRect = petFrame.getBoundingClientRect();
+    const frameLayoutWidth = petFrame.offsetWidth || frameRect.width;
+    const frameLayoutHeight = petFrame.offsetHeight || frameRect.height;
+    const layoutScaleX = frameLayoutWidth > 0 ? frameRect.width / frameLayoutWidth : 1;
+    const layoutScaleY = frameLayoutHeight > 0 ? frameRect.height / frameLayoutHeight : 1;
     const imageWidth = petRoot.offsetWidth;
     const imageHeight = petRoot.offsetHeight;
     if (frameRect.width <= 0 || frameRect.height <= 0 || imageWidth <= 0 || imageHeight <= 0) {
       return null;
     }
 
-    const scaleX = frameRect.width / imageWidth;
-    const scaleY = frameRect.height / imageHeight;
+    const layoutLeft = frameRect.left + petRoot.offsetLeft * layoutScaleX;
+    const layoutTop = frameRect.top + petRoot.offsetTop * layoutScaleY;
+    const scaleX = (imageWidth * layoutScaleX) / imageWidth;
+    const scaleY = (imageHeight * layoutScaleY) / imageHeight;
     if (scaleX <= 0 || scaleY <= 0) {
       return null;
     }
 
-    let localX = (clientX - frameRect.left) / scaleX;
-    let localY = (clientY - frameRect.top) / scaleY;
+    let localX = (clientX - layoutLeft) / scaleX;
+    let localY = (clientY - layoutTop) / scaleY;
     const style = window.getComputedStyle(petRoot);
     if (style.transform && style.transform !== "none") {
       try {
@@ -3676,22 +3689,28 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   async function applyScale(nextScale: number, options: ApplyScaleOptions = {}): Promise<void> {
+    const persist = options.persist ?? true;
+    const showBubble = options.showBubble ?? true;
+    const normalizedScale = clampScale(nextScale);
+    const scaleChanged = normalizedScale !== state.scale;
+
     if (IS_MOBILE_PET_WINDOW) {
-      state.scale = 1;
-      setCssScale(1);
+      state.scale = normalizedScale;
+      setCssScale(normalizedScale);
       updateStatus();
-      if (options.showBubble ?? true) {
-        setBubble("移动端会自动适配屏幕大小。", "hint", 1200);
+
+      if (persist) {
+        localStorage.setItem(SCALE_STORAGE_KEY, String(normalizedScale));
+      }
+
+      if (showBubble && scaleChanged) {
+        setBubble(`桌宠大小 ${Math.round(normalizedScale * 100)}%。`, "hint", 1000);
       }
       return;
     }
 
-    const persist = options.persist ?? true;
-    const showBubble = options.showBubble ?? true;
     const ensureDocked = options.ensureDocked ?? false;
     const forceResize = options.forceResize ?? false;
-    const normalizedScale = clampScale(nextScale);
-    const scaleChanged = normalizedScale !== state.scale;
 
     state.scale = normalizedScale;
     setCssScale(normalizedScale);
@@ -4459,6 +4478,60 @@ window.addEventListener("DOMContentLoaded", () => {
     { passive: false },
   );
 
+  petStage.addEventListener("pointerdown", (event) => {
+    if (!IS_MOBILE_PET_WINDOW || event.pointerType !== "touch") {
+      return;
+    }
+
+    mobileScalePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (mobileScalePointers.size === 2) {
+      const [first, second] = Array.from(mobileScalePointers.values());
+      mobileScaleGestureStartDistance = distanceBetweenPoints(first, second);
+      mobileScaleGestureStartScale = state.scale;
+      event.preventDefault();
+    }
+  });
+
+  petStage.addEventListener(
+    "pointermove",
+    (event) => {
+      if (!IS_MOBILE_PET_WINDOW || event.pointerType !== "touch" || !mobileScalePointers.has(event.pointerId)) {
+        return;
+      }
+
+      mobileScalePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (mobileScalePointers.size < 2 || mobileScaleGestureStartDistance <= 0) {
+        return;
+      }
+
+      const [first, second] = Array.from(mobileScalePointers.values());
+      const nextDistance = distanceBetweenPoints(first, second);
+      const nextScale = mobileScaleGestureStartScale * (nextDistance / mobileScaleGestureStartDistance);
+      event.preventDefault();
+      void applyScale(nextScale, { showBubble: false });
+    },
+    { passive: false },
+  );
+
+  function endMobileScalePointer(pointerId: number): void {
+    if (!IS_MOBILE_PET_WINDOW) {
+      return;
+    }
+
+    mobileScalePointers.delete(pointerId);
+    if (mobileScalePointers.size < 2) {
+      mobileScaleGestureStartDistance = 0;
+      mobileScaleGestureStartScale = state.scale;
+    }
+  }
+
+  petStage.addEventListener("pointerup", (event) => {
+    endMobileScalePointer(event.pointerId);
+  });
+  petStage.addEventListener("pointercancel", (event) => {
+    endMobileScalePointer(event.pointerId);
+  });
+
   petRoot.addEventListener("animationend", () => {
     petRoot.classList.remove("pet-pop");
   });
@@ -4602,7 +4675,7 @@ window.addEventListener("DOMContentLoaded", () => {
     void loadLlmSettings();
   } else if (IS_MOBILE_PET_WINDOW) {
     state.dockedToCorner = false;
-    setCssScale(1);
+    void applyScale(savedScale, { persist: false, showBubble: false });
     syncVoiceControls();
     void loadTtsSettings();
   } else {

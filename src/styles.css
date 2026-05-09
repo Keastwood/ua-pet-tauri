@@ -1655,8 +1655,6 @@ body[data-view="mobile-pet"] .settings-tabs {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
-body[data-view="mobile-pet"] #scale-down-btn,
-body[data-view="mobile-pet"] #scale-up-btn,
 body[data-view="mobile-pet"] #snap-btn,
 body[data-view="mobile-pet"] #open-mask-editor-btn,
 body[data-view="mobile-pet"] #close-btn,
@@ -1705,11 +1703,11 @@ body[data-view="mobile-pet"] #mask-editor-canvas {
 @keyframes mobile-drift {
   0%,
   100% {
-    transform: translateY(0);
+    transform: translateY(0) scale(var(--app-scale));
   }
 
   50% {
-    transform: translateY(-8px);
+    transform: translateY(-8px) scale(var(--app-scale));
   }
 }
 
