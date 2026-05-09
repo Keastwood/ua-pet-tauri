@@ -2579,17 +2579,17 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function isPointOverVisiblePetPixel(point: WindowPosition): boolean {
-    const rect = petRoot.getBoundingClientRect();
-    if (!isPointInsideRect(point, rect)) {
+    if (!petAlphaMask) {
+      return isPointInsideRect(point, petFrame.getBoundingClientRect());
+    }
+
+    const imagePoint = getPetImagePointFromClient(point.x, point.y);
+    if (!imagePoint) {
       return false;
     }
 
-    if (!petAlphaMask) {
-      return true;
-    }
-
-    const sourceX = Math.floor(((point.x - rect.left) / rect.width) * petAlphaMask.width);
-    const sourceY = Math.floor(((point.y - rect.top) / rect.height) * petAlphaMask.height);
+    const sourceX = Math.floor((imagePoint.x / petRoot.offsetWidth) * petAlphaMask.width);
+    const sourceY = Math.floor((imagePoint.y / petRoot.offsetHeight) * petAlphaMask.height);
 
     if (sourceX < 0 || sourceY < 0 || sourceX >= petAlphaMask.width || sourceY >= petAlphaMask.height) {
       return false;
@@ -2868,19 +2868,52 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function getPetImagePointFromClient(clientX: number, clientY: number): MaskPoint | null {
+    const frameRect = petFrame.getBoundingClientRect();
+    const imageWidth = petRoot.offsetWidth;
+    const imageHeight = petRoot.offsetHeight;
+    if (frameRect.width <= 0 || frameRect.height <= 0 || imageWidth <= 0 || imageHeight <= 0) {
+      return null;
+    }
+
+    const scaleX = frameRect.width / imageWidth;
+    const scaleY = frameRect.height / imageHeight;
+    if (scaleX <= 0 || scaleY <= 0) {
+      return null;
+    }
+
+    let localX = (clientX - frameRect.left) / scaleX;
+    let localY = (clientY - frameRect.top) / scaleY;
+    const style = window.getComputedStyle(petRoot);
+    if (style.transform && style.transform !== "none") {
+      try {
+        const originParts = style.transformOrigin.split(/\s+/);
+        const originX = Number.parseFloat(originParts[0]) || imageWidth / 2;
+        const originY = Number.parseFloat(originParts[1]) || imageHeight / 2;
+        const matrix = new DOMMatrixReadOnly(style.transform).inverse();
+        const untransformed = new DOMPoint(localX - originX, localY - originY).matrixTransform(matrix);
+        localX = untransformed.x + originX;
+        localY = untransformed.y + originY;
+      } catch (error) {
+        console.warn("Failed to map pet pointer through transform:", error);
+      }
+    }
+
+    return { x: localX, y: localY };
+  }
+
   function getPetPointerPosition(event?: MouseEvent): PetPointerPosition {
     if (!event) {
       return {};
     }
 
-    const petRect = petRoot.getBoundingClientRect();
-    const renderedImageWidth = petRect.width;
-    const renderedImageHeight = renderedImageWidth * (activeSkin.assetHeight / activeSkin.assetWidth);
-    const imageLeft = petRect.left;
-    const imageTop = petRect.bottom - renderedImageHeight;
+    const point = getPetImagePointFromClient(event.clientX, event.clientY);
+    if (!point) {
+      return {};
+    }
 
-    const xPercent = Math.min(100, Math.max(0, ((event.clientX - imageLeft) / renderedImageWidth) * 100));
-    const rawYPercent = ((event.clientY - imageTop) / renderedImageHeight) * 100;
+    const xPercent = Math.min(100, Math.max(0, (point.x / petRoot.offsetWidth) * 100));
+    const rawYPercent = (point.y / petRoot.offsetHeight) * 100;
     const yPercent = Math.min(100, Math.max(0, rawYPercent + (activeSkin.hitCalibrationY ?? 0)));
     return {
       xPercent: Number(xPercent.toFixed(1)),
@@ -3647,6 +3680,10 @@ window.addEventListener("DOMContentLoaded", () => {
         suppressNextHitboxClick = false;
         event.preventDefault();
         event.stopPropagation();
+        return;
+      }
+
+      if (!isPointOverVisiblePetPixel({ x: event.clientX, y: event.clientY })) {
         return;
       }
 
