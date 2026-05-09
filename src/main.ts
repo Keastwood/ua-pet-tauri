@@ -1134,6 +1134,24 @@ window.addEventListener("DOMContentLoaded", () => {
   let dragMaskSnapshot: BodyMaskPart | null = null;
   let dragMaskStartPoint: MaskPoint | null = null;
   let activeMaskMoveMode: "move" | "scale" | null = null;
+
+  if (IS_MOBILE_PET_WINDOW) {
+    document.addEventListener(
+      "contextmenu",
+      (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      },
+      { capture: true },
+    );
+    document.addEventListener(
+      "gesturestart",
+      (event) => {
+        event.preventDefault();
+      },
+      { passive: false },
+    );
+  }
   let maskScaleReferencePart: BodyMaskPart | null = null;
   let pendingInteractiveDrag:
     | {

@@ -31,6 +31,9 @@ body {
   height: 100%;
   overflow: hidden;
   background: transparent;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
 }
 
 body {
@@ -38,10 +41,13 @@ body {
   justify-content: center;
   align-items: flex-end;
   user-select: none;
+  -webkit-user-select: none;
 }
 
 button {
   font: inherit;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 .mobile-topbar {
@@ -1442,11 +1448,14 @@ body[data-view="settings-menu"] .settings-card {
   max-height: calc(100vh - 24px);
 }
 
+body[data-view="settings-menu"] .settings-tab-btn[data-settings-tab="mask"],
 body[data-view="settings-menu"] .settings-section[data-settings-section="mask"] {
   display: none;
 }
 
 body[data-view="mobile-pet"] {
+  position: fixed;
+  inset: 0;
   align-items: stretch;
   justify-content: stretch;
   width: 100vw;
@@ -1455,7 +1464,30 @@ body[data-view="mobile-pet"] {
   background:
     radial-gradient(circle at 50% 18%, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0) 34%),
     linear-gradient(180deg, rgba(233, 246, 253, 0.9), rgba(213, 232, 242, 0.9));
+  overscroll-behavior: none;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+body[data-view="mobile-pet"] *,
+body[data-view="mobile-pet"] *::before,
+body[data-view="mobile-pet"] *::after {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+
+body[data-view="mobile-pet"] input,
+body[data-view="mobile-pet"] textarea {
+  -webkit-user-select: text;
+  user-select: text;
   touch-action: manipulation;
+}
+
+body[data-view="mobile-pet"] button:focus,
+body[data-view="mobile-pet"] summary:focus,
+body[data-view="mobile-pet"] canvas:focus {
+  outline: none;
 }
 
 body[data-view="mobile-pet"] .window-shell {
@@ -1476,8 +1508,11 @@ body[data-view="mobile-pet"] .mobile-topbar {
   position: fixed;
   top: max(14px, env(safe-area-inset-top));
   right: max(14px, env(safe-area-inset-right));
+  max-width: calc(100vw - max(14px, env(safe-area-inset-left)) - max(14px, env(safe-area-inset-right)));
   z-index: 90;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
   padding: 6px;
   border: 1px solid rgba(84, 136, 171, 0.22);
@@ -1554,7 +1589,14 @@ body[data-view="mobile-pet"] .side-dock {
   width: 58px;
   max-width: 58px;
   z-index: 88;
+  max-height: calc(100dvh - max(14px, env(safe-area-inset-top)) - max(12px, env(safe-area-inset-bottom)) - 70px);
+  overflow-y: auto;
+  scrollbar-width: none;
   transition: opacity 180ms ease, transform 180ms ease;
+}
+
+body[data-view="mobile-pet"] .side-dock::-webkit-scrollbar {
+  display: none;
 }
 
 body[data-view="mobile-pet"][data-mobile-dock="hidden"] .side-dock {
@@ -1601,7 +1643,7 @@ body[data-view="mobile-pet"] .history-card {
 }
 
 body[data-view="mobile-pet"] .settings-tabs {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 body[data-view="mobile-pet"] #scale-down-btn,
@@ -1619,6 +1661,32 @@ body[data-view="mobile-pet"] .floating-input-hint {
 
 body[data-view="mobile-pet"] .settings-section[data-settings-section="display"] .settings-readout {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+body[data-view="mobile-pet"] .mask-editor__header,
+body[data-view="mobile-pet"] .mask-editor__controls,
+body[data-view="mobile-pet"] .mask-editor__part-settings {
+  grid-template-columns: 1fr;
+}
+
+body[data-view="mobile-pet"] .mask-editor__toolbar {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+body[data-view="mobile-pet"] .mask-part-list {
+  grid-template-columns: 1fr;
+  max-height: 132px;
+}
+
+body[data-view="mobile-pet"] .mask-editor__stage {
+  max-height: min(46dvh, 430px);
+  padding: 8px;
+  overflow: auto;
+}
+
+body[data-view="mobile-pet"] #mask-editor-canvas {
+  width: min(100%, 560px);
+  max-width: 100%;
 }
 
 @keyframes mobile-drift {
