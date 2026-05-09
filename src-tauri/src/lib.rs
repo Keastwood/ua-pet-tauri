@@ -6,13 +6,14 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use tauri::{AppHandle, Emitter, Manager, Window};
+#[cfg(not(mobile))]
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, Position, Size,
-    WebviewUrl, WebviewWindowBuilder, Window,
+    LogicalPosition, LogicalSize, PhysicalPosition, Position, Size, WebviewUrl,
+    WebviewWindowBuilder,
 };
-use tauri_plugin_global_shortcut::{
-    Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
-};
+#[cfg(not(mobile))]
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 const DEFAULT_LLM_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_LLM_TIMEOUT_SECS: u64 = 45;
@@ -20,10 +21,15 @@ const LLM_CONFIG_FILE: &str = "llm_config.json";
 const INTERACTION_HISTORY_FILE: &str = "interaction_history.json";
 const CUSTOM_SKINS_DIR: &str = "custom_skins";
 const MAX_HISTORY_RECORDS: usize = 240;
+#[cfg(not(mobile))]
 const PET_INPUT_SHORTCUT_LABEL: &str = "Ctrl+Alt+Space";
+#[cfg(not(mobile))]
 const SETTINGS_MENU_WIDTH: f64 = 430.0;
+#[cfg(not(mobile))]
 const SETTINGS_MENU_HEIGHT: f64 = 720.0;
+#[cfg(not(mobile))]
 const SETTINGS_MENU_ANCHOR_GAP: f64 = 8.0;
+#[cfg(not(mobile))]
 const SETTINGS_MENU_WINDOW_EDGE_ALLOWANCE: f64 = 80.0;
 const DEFAULT_PET_INTERACTION_SYSTEM_PROMPT: &str = "你是银白发桌宠，正在和用户互动。用户会先选择一个交互控件，例如手指、手掌、嘴、脚、羽毛、梳子或零食，再点击桌宠的具体部位。请参考控件、部位、坐标和最近交互历史，用中文给出一句自然、温柔、俏皮的桌宠回应。回复不超过 42 个汉字，不要解释，不要加引号。";
 
@@ -95,21 +101,21 @@ struct WindowPosition {
     physical_y: Option<f64>,
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(not(mobile), target_os = "windows"))]
 #[repr(C)]
 struct WinPoint {
     x: i32,
     y: i32,
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(not(mobile), target_os = "windows"))]
 #[link(name = "user32")]
 extern "system" {
     fn GetCursorPos(point: *mut WinPoint) -> i32;
     fn GetSystemMetrics(index: i32) -> i32;
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(not(mobile), target_os = "windows"))]
 fn global_cursor_position_physical() -> Option<(f64, f64)> {
     let mut point = WinPoint { x: 0, y: 0 };
     let ok = unsafe { GetCursorPos(&mut point) };
@@ -120,12 +126,12 @@ fn global_cursor_position_physical() -> Option<(f64, f64)> {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(mobile), not(target_os = "windows")))]
 fn global_cursor_position_physical() -> Option<(f64, f64)> {
     None
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(not(mobile), target_os = "windows"))]
 fn virtual_screen_bounds() -> Option<(f64, f64, f64, f64)> {
     const SM_XVIRTUALSCREEN: i32 = 76;
     const SM_YVIRTUALSCREEN: i32 = 77;
@@ -148,7 +154,7 @@ fn virtual_screen_bounds() -> Option<(f64, f64, f64, f64)> {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(mobile), not(target_os = "windows")))]
 fn virtual_screen_bounds() -> Option<(f64, f64, f64, f64)> {
     None
 }
@@ -561,10 +567,7 @@ fn backup_corrupt_interaction_history(path: &Path) {
     let _ = fs::rename(path, backup);
 }
 
-fn save_interaction_history(
-    app: &AppHandle,
-    history: &[InteractionRecord],
-) -> Result<(), String> {
+fn save_interaction_history(app: &AppHandle, history: &[InteractionRecord]) -> Result<(), String> {
     let path = interaction_history_path(app)?;
     let text = serde_json::to_string_pretty(history)
         .map_err(|error| format!("序列化交互历史失败：{error}"))?;
@@ -577,8 +580,7 @@ fn save_interaction_history(
         Err(first_error) if path.exists() => {
             fs::remove_file(&path)
                 .map_err(|error| format!("替换旧交互历史失败：{error}; 初始错误：{first_error}"))?;
-            fs::rename(&tmp_path, &path)
-                .map_err(|error| format!("保存交互历史失败：{error}"))
+            fs::rename(&tmp_path, &path).map_err(|error| format!("保存交互历史失败：{error}"))
         }
         Err(error) => Err(format!("保存交互历史失败：{error}")),
     }
@@ -668,9 +670,8 @@ fn effective_llm_config(
         parse_env_u64("LLM_TIMEOUT_SECS", DEFAULT_LLM_TIMEOUT_SECS)
             .unwrap_or(DEFAULT_LLM_TIMEOUT_SECS)
     });
-    let pet_interaction_system_prompt =
-        clean_optional(stored.pet_interaction_system_prompt)
-            .unwrap_or_else(|| DEFAULT_PET_INTERACTION_SYSTEM_PROMPT.to_string());
+    let pet_interaction_system_prompt = clean_optional(stored.pet_interaction_system_prompt)
+        .unwrap_or_else(|| DEFAULT_PET_INTERACTION_SYSTEM_PROMPT.to_string());
 
     Ok(EffectiveLlmConfig {
         api_key,
@@ -747,12 +748,9 @@ fn content_value_to_text(value: &serde_json::Value) -> String {
 }
 
 fn extract_message_text(message: &OpenAiCompatibleMessage) -> String {
-    for value in [
-        message.content.as_ref(),
-        message.text.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
+    for value in [message.content.as_ref(), message.text.as_ref()]
+        .into_iter()
+        .flatten()
     {
         let content = clean_model_text(&content_value_to_text(value));
         if !content.is_empty() {
@@ -1038,7 +1036,10 @@ async fn llm_pet_interact(
                         }
                         Ok(body) => format!(
                             "外脑暂时卡住了：{}",
-                            truncate_error_body(&body).chars().take(36).collect::<String>()
+                            truncate_error_body(&body)
+                                .chars()
+                                .take(36)
+                                .collect::<String>()
                         ),
                         Err(_) => "外脑有回应，但我没能读清楚。".to_string(),
                     }
@@ -1120,7 +1121,10 @@ async fn llm_pet_interact_stream(
                         match response.text().await {
                             Ok(body) => format!(
                                 "外脑暂时卡住了：{}",
-                                truncate_error_body(&body).chars().take(36).collect::<String>()
+                                truncate_error_body(&body)
+                                    .chars()
+                                    .take(36)
+                                    .collect::<String>()
                             ),
                             Err(_) => "外脑有回应，但我没能读清楚。".to_string(),
                         }
@@ -1392,7 +1396,8 @@ fn list_custom_skins(app: AppHandle) -> Result<Vec<CustomSkinView>, String> {
     let dir = custom_skins_dir(&app)?;
     let mut skins = Vec::new();
 
-    for entry in fs::read_dir(&dir).map_err(|error| format!("读取自定义皮肤目录失败：{error}"))? {
+    for entry in fs::read_dir(&dir).map_err(|error| format!("读取自定义皮肤目录失败：{error}"))?
+    {
         let entry = entry.map_err(|error| format!("读取自定义皮肤失败：{error}"))?;
         let skin_dir = entry.path();
         if !skin_dir.is_dir() {
@@ -1408,7 +1413,10 @@ fn list_custom_skins(app: AppHandle) -> Result<Vec<CustomSkinView>, String> {
             .map_err(|error| format!("读取自定义皮肤清单失败：{error}"))?;
         match serde_json::from_str::<CustomSkinManifest>(&text) {
             Ok(manifest) => skins.push(manifest_to_custom_skin_view(&skin_dir, manifest)),
-            Err(error) => eprintln!("Failed to parse custom skin manifest {:?}: {error}", manifest_path),
+            Err(error) => eprintln!(
+                "Failed to parse custom skin manifest {:?}: {error}",
+                manifest_path
+            ),
         }
     }
 
@@ -1417,7 +1425,10 @@ fn list_custom_skins(app: AppHandle) -> Result<Vec<CustomSkinView>, String> {
 }
 
 #[tauri::command]
-fn save_custom_skin(app: AppHandle, request: SaveCustomSkinRequest) -> Result<CustomSkinView, String> {
+fn save_custom_skin(
+    app: AppHandle,
+    request: SaveCustomSkinRequest,
+) -> Result<CustomSkinView, String> {
     if request.asset_width == 0 || request.asset_height == 0 {
         return Err("皮肤图片尺寸无效。".to_string());
     }
@@ -1449,12 +1460,18 @@ fn save_custom_skin(app: AppHandle, request: SaveCustomSkinRequest) -> Result<Cu
         &skin_dir.join(&assets.surprised),
         &request.images.surprised_data_url,
     )?;
-    write_skin_data_url(&skin_dir.join(&assets.blink), &request.images.blink_data_url)?;
+    write_skin_data_url(
+        &skin_dir.join(&assets.blink),
+        &request.images.blink_data_url,
+    )?;
     write_skin_data_url(
         &skin_dir.join(&assets.mouth_talk),
         &request.images.mouth_talk_data_url,
     )?;
-    write_skin_data_url(&skin_dir.join(&assets.mouth_o), &request.images.mouth_o_data_url)?;
+    write_skin_data_url(
+        &skin_dir.join(&assets.mouth_o),
+        &request.images.mouth_o_data_url,
+    )?;
 
     let manifest = CustomSkinManifest {
         schema_version: 1,
@@ -1496,6 +1513,7 @@ fn delete_custom_skin(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+#[cfg(not(mobile))]
 fn move_pet_window(window: Window, x: f64, y: f64) -> Result<(), String> {
     window
         .set_position(Position::Logical(LogicalPosition::new(x, y)))
@@ -1503,6 +1521,13 @@ fn move_pet_window(window: Window, x: f64, y: f64) -> Result<(), String> {
 }
 
 #[tauri::command]
+#[cfg(mobile)]
+fn move_pet_window(_window: Window, _x: f64, _y: f64) -> Result<(), String> {
+    Ok(())
+}
+
+#[tauri::command]
+#[cfg(not(mobile))]
 fn get_pet_window_position(window: Window) -> Result<WindowPosition, String> {
     let scale_factor = window.scale_factor().map_err(|error| error.to_string())?;
     let position = window.outer_position().map_err(|error| error.to_string())?;
@@ -1517,11 +1542,26 @@ fn get_pet_window_position(window: Window) -> Result<WindowPosition, String> {
 }
 
 #[tauri::command]
+#[cfg(mobile)]
+fn get_pet_window_position(_window: Window) -> Result<WindowPosition, String> {
+    Ok(WindowPosition {
+        x: 0.0,
+        y: 0.0,
+        window_width: None,
+        physical_x: None,
+        physical_y: None,
+    })
+}
+
+#[tauri::command]
+#[cfg(not(mobile))]
 fn get_pet_cursor_position(window: Window) -> Result<WindowPosition, String> {
     let scale_factor = window.scale_factor().map_err(|error| error.to_string())?;
     let window_position = window.outer_position().map_err(|error| error.to_string())?;
     let window_size = window.outer_size().map_err(|error| error.to_string())?;
-    let cursor_position = window.cursor_position().map_err(|error| error.to_string())?;
+    let cursor_position = window
+        .cursor_position()
+        .map_err(|error| error.to_string())?;
     let physical_position = global_cursor_position_physical();
     Ok(WindowPosition {
         x: (cursor_position.x - f64::from(window_position.x)) / scale_factor,
@@ -1533,6 +1573,19 @@ fn get_pet_cursor_position(window: Window) -> Result<WindowPosition, String> {
 }
 
 #[tauri::command]
+#[cfg(mobile)]
+fn get_pet_cursor_position(_window: Window) -> Result<WindowPosition, String> {
+    Ok(WindowPosition {
+        x: 0.0,
+        y: 0.0,
+        window_width: None,
+        physical_x: None,
+        physical_y: None,
+    })
+}
+
+#[tauri::command]
+#[cfg(not(mobile))]
 fn resize_pet_window(window: Window, width: f64, height: f64) -> Result<(), String> {
     let scale_factor = window.scale_factor().map_err(|error| error.to_string())?;
     let outer_position = window.outer_position().map_err(|error| error.to_string())?;
@@ -1556,6 +1609,13 @@ fn resize_pet_window(window: Window, width: f64, height: f64) -> Result<(), Stri
 }
 
 #[tauri::command]
+#[cfg(mobile)]
+fn resize_pet_window(_window: Window, _width: f64, _height: f64) -> Result<(), String> {
+    Ok(())
+}
+
+#[tauri::command]
+#[cfg(not(mobile))]
 fn set_pet_always_on_top(window: Window, always_on_top: bool) -> Result<(), String> {
     window
         .set_always_on_top(always_on_top)
@@ -1563,6 +1623,13 @@ fn set_pet_always_on_top(window: Window, always_on_top: bool) -> Result<(), Stri
 }
 
 #[tauri::command]
+#[cfg(mobile)]
+fn set_pet_always_on_top(_window: Window, _always_on_top: bool) -> Result<(), String> {
+    Ok(())
+}
+
+#[tauri::command]
+#[cfg(not(mobile))]
 fn set_pet_ignore_cursor_events(window: Window, ignore: bool) -> Result<(), String> {
     window
         .set_ignore_cursor_events(ignore)
@@ -1570,10 +1637,24 @@ fn set_pet_ignore_cursor_events(window: Window, ignore: bool) -> Result<(), Stri
 }
 
 #[tauri::command]
+#[cfg(mobile)]
+fn set_pet_ignore_cursor_events(_window: Window, _ignore: bool) -> Result<(), String> {
+    Ok(())
+}
+
+#[tauri::command]
+#[cfg(not(mobile))]
 fn close_pet(window: Window) -> Result<(), String> {
     window.close().map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+#[cfg(mobile)]
+fn close_pet(_window: Window) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(not(mobile))]
 fn mask_editor_url() -> Result<WebviewUrl, String> {
     if cfg!(debug_assertions) {
         "http://localhost:1420/?view=mask-editor"
@@ -1585,6 +1666,7 @@ fn mask_editor_url() -> Result<WebviewUrl, String> {
     }
 }
 
+#[cfg(not(mobile))]
 fn settings_menu_url() -> Result<WebviewUrl, String> {
     if cfg!(debug_assertions) {
         "http://localhost:1420/?view=settings-menu"
@@ -1597,28 +1679,32 @@ fn settings_menu_url() -> Result<WebviewUrl, String> {
 }
 
 #[tauri::command]
+#[cfg(not(mobile))]
 async fn open_mask_editor(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("mask-editor") {
         let _ = window.show();
         return window.set_focus().map_err(|error| error.to_string());
     }
 
-    WebviewWindowBuilder::new(
-        &app,
-        "mask-editor",
-        mask_editor_url()?,
-    )
-    .title("Silver Pet Mask Editor")
-    .inner_size(920.0, 760.0)
-    .min_inner_size(760.0, 620.0)
-    .resizable(true)
-    .decorations(true)
-    .transparent(false)
-    .build()
-    .map(|_| ())
-    .map_err(|error| error.to_string())
+    WebviewWindowBuilder::new(&app, "mask-editor", mask_editor_url()?)
+        .title("Silver Pet Mask Editor")
+        .inner_size(920.0, 760.0)
+        .min_inner_size(760.0, 620.0)
+        .resizable(true)
+        .decorations(true)
+        .transparent(false)
+        .build()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+#[cfg(mobile)]
+async fn open_mask_editor(_app: AppHandle) -> Result<(), String> {
+    Err("移动端暂不支持独立蒙版编辑器。".to_string())
+}
+
+#[cfg(not(mobile))]
 fn settings_menu_position(
     app: &AppHandle,
     anchor: Option<(f64, f64)>,
@@ -1689,7 +1775,12 @@ fn settings_menu_position(
 }
 
 #[tauri::command]
-async fn open_settings_menu(app: AppHandle, anchor_x: Option<f64>, anchor_y: Option<f64>) -> Result<(), String> {
+#[cfg(not(mobile))]
+async fn open_settings_menu(
+    app: AppHandle,
+    anchor_x: Option<f64>,
+    anchor_y: Option<f64>,
+) -> Result<(), String> {
     let anchor = anchor_x.zip(anchor_y);
     if let Some(window) = app.get_webview_window("settings-menu") {
         let _ = window.hide();
@@ -1730,9 +1821,22 @@ async fn open_settings_menu(app: AppHandle, anchor_x: Option<f64>, anchor_y: Opt
     window.set_focus().map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+#[cfg(mobile)]
+async fn open_settings_menu(
+    _app: AppHandle,
+    _anchor_x: Option<f64>,
+    _anchor_y: Option<f64>,
+) -> Result<(), String> {
+    Err("移动端使用内置设置面板。".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+
+    #[cfg(not(mobile))]
+    let builder = builder
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -1746,14 +1850,15 @@ pub fn run() {
                 })
                 .build(),
         )
-        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space);
             app.global_shortcut()
                 .register(shortcut)
                 .map_err(|error| format!("register global shortcut failed: {error}"))?;
             Ok(())
-        })
+        });
+
+    builder
         .invoke_handler(tauri::generate_handler![
             clear_interaction_history,
             delete_custom_skin,

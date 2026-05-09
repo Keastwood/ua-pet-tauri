@@ -21,6 +21,12 @@ const IS_SETTINGS_MENU_WINDOW =
   getCurrentWindowLabel() === "settings-menu" ||
   new URLSearchParams(window.location.search).get("view") === "settings-menu" ||
   window.location.hash === "#settings-menu";
+const IS_MOBILE_PET_WINDOW =
+  !IS_MASK_EDITOR_WINDOW &&
+  !IS_SETTINGS_MENU_WINDOW &&
+  (new URLSearchParams(window.location.search).get("view") === "mobile-pet" ||
+    window.location.hash === "#mobile-pet" ||
+    /Android|iPhone|iPad|iPod/i.test(navigator.userAgent));
 const IS_PET_WINDOW = !IS_MASK_EDITOR_WINDOW && !IS_SETTINGS_MENU_WINDOW;
 
 type Tone = "warm" | "alert" | "hint";
@@ -928,14 +934,23 @@ function setCssScale(scale: number): void {
 }
 
 async function movePetWindow(x: number, y: number): Promise<void> {
+  if (IS_MOBILE_PET_WINDOW) {
+    return;
+  }
   await invoke("move_pet_window", { x, y });
 }
 
 async function resizePetWindow(width: number, height: number): Promise<void> {
+  if (IS_MOBILE_PET_WINDOW) {
+    return;
+  }
   await invoke("resize_pet_window", { width, height });
 }
 
 async function setAlwaysOnTop(alwaysOnTop: boolean): Promise<void> {
+  if (IS_MOBILE_PET_WINDOW) {
+    return;
+  }
   await invoke("set_pet_always_on_top", { alwaysOnTop });
 }
 
@@ -952,10 +967,16 @@ async function getPetCursorPosition(): Promise<WindowPosition> {
 }
 
 async function setPetIgnoreCursorEvents(ignore: boolean): Promise<void> {
+  if (IS_MOBILE_PET_WINDOW) {
+    return;
+  }
   await invoke("set_pet_ignore_cursor_events", { ignore });
 }
 
 async function openMaskEditorWindow(): Promise<void> {
+  if (IS_MOBILE_PET_WINDOW) {
+    throw new Error("移动端暂不支持独立蒙版编辑器。");
+  }
   await invoke("open_mask_editor");
 }
 
@@ -976,7 +997,16 @@ async function moveWindowToDesktopCorner(scale = state.scale): Promise<void> {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
-  document.body.dataset.view = IS_MASK_EDITOR_WINDOW ? "mask-editor" : IS_SETTINGS_MENU_WINDOW ? "settings-menu" : "pet";
+  document.body.dataset.view = IS_MASK_EDITOR_WINDOW
+    ? "mask-editor"
+    : IS_SETTINGS_MENU_WINDOW
+      ? "settings-menu"
+      : IS_MOBILE_PET_WINDOW
+        ? "mobile-pet"
+        : "pet";
+  if (IS_MOBILE_PET_WINDOW) {
+    document.body.dataset.mobileDock = "hidden";
+  }
   const petApp = must<HTMLElement>(".pet-app");
   const petRoot = must<HTMLDivElement>("#pet");
   const petStage = must<HTMLDivElement>("#pet-stage");
@@ -1026,6 +1056,9 @@ window.addEventListener("DOMContentLoaded", () => {
   const llmModeButton = must<HTMLButtonElement>("#llm-mode-btn");
   const historyButton = must<HTMLButtonElement>("#history-btn");
   const closeButton = must<HTMLButtonElement>("#close-btn");
+  const mobileToolsButton = must<HTMLButtonElement>("#mobile-tools-btn");
+  const mobileChatButton = must<HTMLButtonElement>("#mobile-chat-btn");
+  const mobileSettingsButton = must<HTMLButtonElement>("#mobile-settings-btn");
   const interactionToolValue = must<HTMLElement>("#interaction-tool-value");
   const interactionToolButtonsContainer = must<HTMLDivElement>(".interaction-tools__buttons");
   const interactionToolEditorSelect = must<HTMLSelectElement>("#interaction-editor-select");
@@ -2740,7 +2773,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function openSettings(anchor?: { x: number; y: number }): void {
     forceCaptureCursorEvents();
-    if (IS_PET_WINDOW) {
+    if (IS_PET_WINDOW && !IS_MOBILE_PET_WINDOW) {
       void openSettingsMenuWindow(anchor).catch((error) => {
         console.error(error);
         setBubble("右键菜单打开失败了。", "alert", 1800);
@@ -3114,6 +3147,10 @@ window.addEventListener("DOMContentLoaded", () => {
     floatingInput.hidden = false;
     floatingInput.dataset.show = "true";
     floatingInputHint.textContent = "Enter 发送，Esc 收起。";
+    if (IS_MOBILE_PET_WINDOW) {
+      mobileChatButton.textContent = "收起";
+      mobileChatButton.setAttribute("aria-pressed", "true");
+    }
     window.setTimeout(() => {
       floatingTextInput.focus();
       floatingTextInput.select();
@@ -3122,11 +3159,29 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function closeFloatingInput(): void {
     floatingInput.dataset.show = "false";
+    if (IS_MOBILE_PET_WINDOW) {
+      mobileChatButton.textContent = "对话";
+      mobileChatButton.setAttribute("aria-pressed", "false");
+    }
     window.setTimeout(() => {
       if (floatingInput.dataset.show !== "true") {
         floatingInput.hidden = true;
       }
     }, 180);
+  }
+
+  function setMobileDockVisible(visible: boolean): void {
+    if (!IS_MOBILE_PET_WINDOW) {
+      return;
+    }
+
+    document.body.dataset.mobileDock = visible ? "visible" : "hidden";
+    mobileToolsButton.setAttribute("aria-pressed", String(visible));
+    mobileToolsButton.textContent = visible ? "收起" : "工具";
+  }
+
+  function toggleMobileDock(): void {
+    setMobileDockVisible(document.body.dataset.mobileDock !== "visible");
   }
 
   function startThinkingDots(requestId: number): void {
@@ -3313,6 +3368,16 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   async function applyScale(nextScale: number, options: ApplyScaleOptions = {}): Promise<void> {
+    if (IS_MOBILE_PET_WINDOW) {
+      state.scale = 1;
+      setCssScale(1);
+      updateStatus();
+      if (options.showBubble ?? true) {
+        setBubble("移动端会自动适配屏幕大小。", "hint", 1200);
+      }
+      return;
+    }
+
     const persist = options.persist ?? true;
     const showBubble = options.showBubble ?? true;
     const ensureDocked = options.ensureDocked ?? false;
@@ -3588,6 +3653,10 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function startInteractiveDragGesture(event: PointerEvent): void {
+    if (IS_MOBILE_PET_WINDOW) {
+      return;
+    }
+
     if (event.button !== 0) {
       return;
     }
@@ -4111,6 +4180,22 @@ window.addEventListener("DOMContentLoaded", () => {
     void safeClose();
   });
 
+  mobileToolsButton.addEventListener("click", () => {
+    toggleMobileDock();
+  });
+
+  mobileChatButton.addEventListener("click", () => {
+    if (floatingInput.hidden) {
+      openFloatingInput();
+    } else {
+      closeFloatingInput();
+    }
+  });
+
+  mobileSettingsButton.addEventListener("click", () => {
+    openSettings();
+  });
+
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       if (!settingsPanel.hidden) {
@@ -4187,6 +4272,10 @@ window.addEventListener("DOMContentLoaded", () => {
     syncInteractionToolEditor();
     syncVoiceControls();
     void loadLlmSettings();
+  } else if (IS_MOBILE_PET_WINDOW) {
+    state.dockedToCorner = false;
+    setCssScale(1);
+    syncVoiceControls();
   } else {
     void applyScale(savedScale, { persist: false, showBubble: false, ensureDocked: true });
   }
@@ -4199,13 +4288,19 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   if (IS_PET_WINDOW) {
-    window.setInterval(() => {
-      void syncPointerPassthrough();
-    }, POINTER_PASSTHROUGH_INTERVAL_MS);
-    window.addEventListener("beforeunload", () => {
-      forceCaptureCursorEvents();
-    });
-    setBubble("可以拖动我，也可以用滚轮或 +/- 调整大小。", "hint", 3400);
+    if (!IS_MOBILE_PET_WINDOW) {
+      window.setInterval(() => {
+        void syncPointerPassthrough();
+      }, POINTER_PASSTHROUGH_INTERVAL_MS);
+      window.addEventListener("beforeunload", () => {
+        forceCaptureCursorEvents();
+      });
+    }
+    setBubble(
+      IS_MOBILE_PET_WINDOW ? "点我互动；右上角可以打开工具、对话和设置。" : "可以拖动我，也可以用滚轮或 +/- 调整大小。",
+      "hint",
+      3400,
+    );
     scheduleBlink();
     startIdleChatter();
   }

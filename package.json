@@ -10,7 +10,10 @@
     "skin:generate:heart": "node scripts/generate-skin.mjs --image ../爱心眼ua.png --id heart-eye-ua --name \"爱心眼 UA\" --layout fullBody",
     "skin:refresh": "node scripts/generate-skin.mjs --refresh",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "android:init": "tauri android init",
+    "android:dev": "tauri android dev",
+    "android:build": "tauri android build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

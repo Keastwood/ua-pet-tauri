@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Silver Pet",
+        "url": "index.html?view=mobile-pet",
+        "width": 430,
+        "height": 854,
+        "fullscreen": true,
+        "resizable": true,
+        "decorations": true,
+        "transparent": false,
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
+        "shadow": true
+      }
+    ]
+  }
+}

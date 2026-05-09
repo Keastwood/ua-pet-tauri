@@ -11,6 +11,11 @@
     <main class="window-shell">
       <section class="pet-app">
         <div id="bubble" class="speech-bubble" data-tone="warm" data-show="false"></div>
+        <div class="mobile-topbar" aria-label="移动端快捷操作">
+          <button id="mobile-tools-btn" class="mobile-topbar__btn" type="button" aria-label="显示互动工具" aria-pressed="false">工具</button>
+          <button id="mobile-chat-btn" class="mobile-topbar__btn mobile-topbar__btn--primary" type="button" aria-label="打开对话">对话</button>
+          <button id="mobile-settings-btn" class="mobile-topbar__btn" type="button" aria-label="打开设置">设置</button>
+        </div>
 
         <aside id="history-panel" class="history-panel" aria-label="交互历史" hidden>
           <div class="history-card">
