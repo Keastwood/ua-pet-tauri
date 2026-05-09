@@ -12,6 +12,8 @@ class MainActivity : TauriActivity() {
 
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
+    // The pet handles scale and gestures in JS; keep Android WebView chrome out
+    // so taps do not show selection highlights or the system context menu.
     webView.settings.setSupportZoom(false)
     webView.settings.builtInZoomControls = false
     webView.settings.displayZoomControls = false

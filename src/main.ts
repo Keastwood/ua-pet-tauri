@@ -610,6 +610,9 @@ function preserveLegacyLayerOrder(parts: BodyMaskPart[]): BodyMaskPart[] {
     return parts;
   }
 
+  // Older saved masks only persisted array order. Keep that order when users had
+  // moved generated rule masks, but let untouched generated masks fall back to
+  // area-based priority so small parts win over broad regions.
   const allPartsAreAutoRules = parts.length > 0 && parts.every((part) => isAutoRuleMaskId(part.id));
   const autoRuleOrderWasChanged = allPartsAreAutoRules && parts.some((part, index) => part.id !== `rule-${index}`);
   if (!autoRuleOrderWasChanged) {
@@ -698,6 +701,8 @@ function getBodyMaskArea(part: BodyMaskPart): number {
 }
 
 function getBodyMaskHitPriority(part: BodyMaskPart): number {
+  // Explicit editor layers override the default "smallest matching region wins"
+  // behavior. The large offset keeps user-authored ordering above inferred masks.
   return Number.isFinite(part.layer) ? Number(part.layer) + 100000 : -getBodyMaskArea(part);
 }
 
@@ -1144,6 +1149,8 @@ window.addEventListener("DOMContentLoaded", () => {
       },
       { capture: true },
     );
+    // Android WebView may still emit gesture events even with viewport zoom
+    // disabled; preventing them keeps fixed toolbars pinned to the viewport.
     document.addEventListener(
       "gesturestart",
       (event) => {
@@ -2938,6 +2945,9 @@ window.addEventListener("DOMContentLoaded", () => {
     const style = window.getComputedStyle(petRoot);
     if (style.transform && style.transform !== "none") {
       try {
+        // The pet has an idle transform animation. Hit testing must map pointer
+        // coordinates back into untransformed image space or masks drift away
+        // from the visible sprite, especially at large desktop scales.
         const originParts = style.transformOrigin.split(/\s+/);
         const originX = Number.parseFloat(originParts[0]) || imageWidth / 2;
         const originY = Number.parseFloat(originParts[1]) || imageHeight / 2;

@@ -1523,6 +1523,8 @@ fn move_pet_window(window: Window, x: f64, y: f64) -> Result<(), String> {
 #[tauri::command]
 #[cfg(mobile)]
 fn move_pet_window(_window: Window, _x: f64, _y: f64) -> Result<(), String> {
+    // Android is a full-screen app in the first phase. Keep this as a no-op so
+    // shared front-end drag code can call the same command on every platform.
     Ok(())
 }
 
@@ -1710,6 +1712,8 @@ fn settings_menu_position(
     anchor: Option<(f64, f64)>,
     menu_size: Option<(f64, f64)>,
 ) -> Option<PhysicalPosition<i32>> {
+    // Position the menu like a native context menu: start from the click point,
+    // then flip left/up when the virtual desktop edge would clip the window.
     let (anchor_x, anchor_y) = anchor.or_else(global_cursor_position_physical)?;
     let monitors = app.available_monitors().ok()?;
     let monitor_scale_factor = monitors
