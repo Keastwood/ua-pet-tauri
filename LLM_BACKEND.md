@@ -69,6 +69,18 @@ The pet interaction user prompt is generated in `src-tauri/src/lib.rs` by `forma
 
 Before the first stream chunk arrives, the frontend shows a thinking indicator cycling from `·` to `······`. Once the first delta arrives, the speech bubble switches to the streamed text.
 
+## AI Voice Output
+
+The desktop pet can synthesize spoken replies after local or LLM interactions. Runtime settings live in the right-click settings menu under the voice tab and are saved by the Tauri backend as `tts_config.json` in the app config directory.
+
+Supported providers:
+
+- `GPT-SoVITS api_v2`: configure a server base URL such as `http://127.0.0.1:9880`. The backend posts to `/tts` with `text`, `text_lang`, `ref_audio_path`, `prompt_lang`, `prompt_text`, `media_type`, `speed_factor`, and non-streaming inference flags.
+- `OpenAI compatible /audio/speech`: configure a base URL or full `/audio/speech` URL, model, voice, optional API key, output format, and speed.
+- `Custom JSON audio endpoint`: posts `text`, `input`, optional `model`, optional `voice`, `format`, `mediaType`, and `speed` to the exact endpoint, expecting an audio response body.
+
+When AI voice is enabled, the frontend calls `synthesize_speech` after a reply is ready and plays the returned audio data URL while keeping the mouth animation active. The feature is HTTP-based, so GPT-SoVITS, local voice changers, and hosted TTS bridges can be swapped without changing the desktop pet code.
+
 ## Interaction Tools
 
 The current selectable tools are defined in `src/main.ts` as `INTERACTION_TOOLS`:

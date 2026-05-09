@@ -326,6 +326,15 @@ button {
   line-height: 1.45;
 }
 
+.settings-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-grid--two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .settings-field input:focus,
 .settings-field select:focus,
 .settings-field textarea:focus {
@@ -1661,6 +1670,10 @@ body[data-view="mobile-pet"] .floating-input-hint {
 
 body[data-view="mobile-pet"] .settings-section[data-settings-section="display"] .settings-readout {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+body[data-view="mobile-pet"] .settings-grid--two {
+  grid-template-columns: 1fr;
 }
 
 body[data-view="mobile-pet"] .mask-editor__header,

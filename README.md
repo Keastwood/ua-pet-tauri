@@ -6,7 +6,7 @@
 
 主界面可以切换助手皮肤。默认皮肤使用半身部位绑定，生成器也默认使用这套绑定；全身立绘可以使用 `fullBody` 绑定预设。新增图片并一键生成皮肤文件的流程见 [SKINS.md](./SKINS.md)。
 
-一个基于 Tauri 2 + Vanilla TypeScript 的桌面宠物应用。当前版本支持透明桌宠窗口、点击互动、表情切换、可选背景模式、运行时配置 LLM、交互历史记录，以及可选择交互控件的桌宠互动。
+一个基于 Tauri 2 + Vanilla TypeScript 的桌面宠物应用。当前版本支持透明桌宠窗口、点击互动、表情切换、可选背景模式、运行时配置 LLM、交互历史记录、AI 发声，以及可选择交互控件的桌宠互动。
 
 ## 功能
 
@@ -14,6 +14,7 @@
 - 点击桌宠不同部位触发互动，并支持亲密度和状态反馈。
 - 可选择交互控件，例如手指、手掌、嘴、脚、羽毛、梳子、零食。
 - LLM 交互模式会记录控件、目标部位、点击坐标、文本输入和模型回复。
+- AI 发声可接入 GPT-SoVITS `api_v2`、OpenAI 兼容 `/audio/speech` 或通用 JSON 音频端点。
 - 右键桌宠打开设置页，运行时配置 OpenAI 兼容 LLM API 和桌宠交互系统提示词。
 - 历史页可查看或清空最近交互记录。
 - 全局快捷键 `Ctrl + Alt + Space` 可唤出悬浮输入框。
@@ -52,6 +53,10 @@ cargo check --manifest-path src-tauri/Cargo.toml
 - 点击/快捷输入等桌宠交互提示词在 `src-tauri/src/lib.rs` 的 `DEFAULT_PET_INTERACTION_SYSTEM_PROMPT`，也可以在设置页覆盖。
 
 完整说明见 [LLM_BACKEND.md](./LLM_BACKEND.md)。
+
+## AI 语音
+
+右键桌宠打开设置页，在“语音”标签里配置 AI 发声。GPT-SoVITS 推荐启动 `api_v2.py` 后填写 `http://127.0.0.1:9880`，并配置服务端可访问的参考音频路径、参考文本和语言；程序会调用 `/tts` 合成音频。其他服务可以选择 OpenAI 兼容 `/audio/speech` 或自定义 JSON 音频端点。
 
 ## 主要目录
 

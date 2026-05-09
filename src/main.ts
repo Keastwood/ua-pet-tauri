@@ -94,6 +94,29 @@ interface LlmConfigView {
   defaultPetInteractionSystemPrompt: string;
 }
 
+interface TtsConfigView {
+  enabled: boolean;
+  provider: "gptSovits" | "openAiCompatible" | "customJson";
+  endpoint: string;
+  hasApiKey: boolean;
+  maskedApiKey?: string;
+  model: string;
+  voice: string;
+  mediaType: string;
+  textLang: string;
+  refAudioPath: string;
+  promptLang: string;
+  promptText: string;
+  speedFactor: number;
+  timeoutSecs: number;
+}
+
+interface TtsSynthesisResponse {
+  audioDataUrl: string;
+  contentType: string;
+  provider: string;
+}
+
 interface InteractionRecord {
   id: number;
   timestampMs: number;
@@ -1048,6 +1071,24 @@ window.addEventListener("DOMContentLoaded", () => {
   const voiceStatus = must<HTMLParagraphElement>("#voice-status");
   const voiceTestButton = must<HTMLButtonElement>("#voice-test-btn");
   const voiceRestartButton = must<HTMLButtonElement>("#voice-restart-btn");
+  const ttsEnabledInput = must<HTMLInputElement>("#tts-enabled-input");
+  const ttsProviderSelect = must<HTMLSelectElement>("#tts-provider-select");
+  const ttsEndpointInput = must<HTMLInputElement>("#tts-endpoint-input");
+  const ttsApiKeyInput = must<HTMLInputElement>("#tts-api-key-input");
+  const ttsClearKeyInput = must<HTMLInputElement>("#tts-clear-key-input");
+  const ttsModelInput = must<HTMLInputElement>("#tts-model-input");
+  const ttsVoiceInput = must<HTMLInputElement>("#tts-voice-input");
+  const ttsMediaTypeSelect = must<HTMLSelectElement>("#tts-media-type-select");
+  const ttsTextLangInput = must<HTMLInputElement>("#tts-text-lang-input");
+  const ttsRefAudioPathInput = must<HTMLInputElement>("#tts-ref-audio-path-input");
+  const ttsPromptLangInput = must<HTMLInputElement>("#tts-prompt-lang-input");
+  const ttsPromptTextInput = must<HTMLTextAreaElement>("#tts-prompt-text-input");
+  const ttsSpeedInput = must<HTMLInputElement>("#tts-speed-input");
+  const ttsSpeedValue = must<HTMLElement>("#tts-speed-value");
+  const ttsTimeoutInput = must<HTMLInputElement>("#tts-timeout-input");
+  const ttsStatus = must<HTMLParagraphElement>("#tts-status");
+  const ttsSaveButton = must<HTMLButtonElement>("#tts-save-btn");
+  const ttsTestButton = must<HTMLButtonElement>("#tts-test-btn");
   const affectionValue = must<HTMLSpanElement>("#affection-value");
   const moodValue = must<HTMLSpanElement>("#mood-value");
   const scaleValue = must<HTMLSpanElement>("#scale-value");
@@ -1126,6 +1167,9 @@ window.addEventListener("DOMContentLoaded", () => {
   let voiceIntentionalStop = false;
   let voiceSensitivity = clampVoiceSensitivity(Number(localStorage.getItem(VOICE_SENSITIVITY_STORAGE_KEY) ?? "6"));
   let voiceLanguage = localStorage.getItem(VOICE_LANGUAGE_STORAGE_KEY) || "zh-CN";
+  let ttsPlaybackEnabled = false;
+  let ttsPlaybackRequestId = 0;
+  let activeSpeechAudio: HTMLAudioElement | null = null;
   let maskEditorParts = cloneBodyMaskParts(getBodyMasksForSkin(activeSkin));
   let selectedMaskPartId = maskEditorParts[0]?.id ?? "";
   let selectedMaskTool: MaskTool = "move";
@@ -2381,6 +2425,139 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function setTtsStatus(text: string, tone: Tone | "idle" = "idle"): void {
+    ttsStatus.textContent = text;
+    ttsStatus.dataset.tone = tone;
+  }
+
+  function clampTtsTimeoutSeconds(value: number): number {
+    if (!Number.isFinite(value)) {
+      return 60;
+    }
+
+    return Math.min(300, Math.max(5, Math.round(value)));
+  }
+
+  function clampTtsSpeed(value: number): number {
+    if (!Number.isFinite(value)) {
+      return 1;
+    }
+
+    return Math.min(2, Math.max(0.5, Math.round(value * 100) / 100));
+  }
+
+  function applyTtsConfig(config: TtsConfigView): void {
+    ttsPlaybackEnabled = config.enabled;
+    if (!config.enabled) {
+      stopAiSpeech();
+    }
+    ttsEnabledInput.checked = config.enabled;
+    ttsProviderSelect.value = config.provider;
+    ttsEndpointInput.value = config.endpoint || "http://127.0.0.1:9880";
+    ttsApiKeyInput.value = "";
+    ttsApiKeyInput.placeholder = config.hasApiKey
+      ? `已保存：${config.maskedApiKey ?? "••••"}（留空则保留）`
+      : "可选，部分服务需要";
+    ttsClearKeyInput.checked = false;
+    ttsModelInput.value = config.model ?? "";
+    ttsVoiceInput.value = config.voice ?? "";
+    ttsMediaTypeSelect.value = config.mediaType || "wav";
+    ttsTextLangInput.value = config.textLang || "zh";
+    ttsRefAudioPathInput.value = config.refAudioPath ?? "";
+    ttsPromptLangInput.value = config.promptLang || "zh";
+    ttsPromptTextInput.value = config.promptText ?? "";
+    ttsSpeedInput.value = String(config.speedFactor || 1);
+    ttsSpeedValue.textContent = `${Math.round((config.speedFactor || 1) * 100)}%`;
+    ttsTimeoutInput.value = String(config.timeoutSecs || 60);
+    syncTtsProviderFields();
+  }
+
+  function syncTtsProviderFields(): void {
+    const provider = ttsProviderSelect.value;
+    const isGptSovits = provider === "gptSovits";
+    ttsTextLangInput.disabled = !isGptSovits;
+    ttsRefAudioPathInput.disabled = !isGptSovits;
+    ttsPromptLangInput.disabled = !isGptSovits;
+    ttsPromptTextInput.disabled = !isGptSovits;
+    ttsModelInput.disabled = provider === "gptSovits";
+    ttsVoiceInput.disabled = provider === "gptSovits";
+
+    if (isGptSovits && !ttsEndpointInput.value.trim()) {
+      ttsEndpointInput.value = "http://127.0.0.1:9880";
+    } else if (provider === "openAiCompatible" && !ttsEndpointInput.value.trim()) {
+      ttsEndpointInput.value = "https://api.openai.com/v1";
+    }
+  }
+
+  async function loadTtsSettings(): Promise<void> {
+    setTtsStatus("正在读取 AI 发声配置...", "idle");
+
+    try {
+      const config = await invoke<TtsConfigView>("get_tts_config");
+      applyTtsConfig(config);
+      setTtsStatus(
+        config.enabled ? "AI 发声已开启，桌宠回复会自动合成语音。" : "AI 发声未开启。可接入 GPT-SoVITS 或通用语音 HTTP 服务。",
+        "idle",
+      );
+    } catch (error) {
+      console.error(error);
+      setTtsStatus(`读取 AI 发声配置失败：${String(error)}`, "alert");
+    }
+  }
+
+  function collectTtsConfigRequest(): Record<string, unknown> {
+    return {
+      enabled: ttsEnabledInput.checked,
+      provider: ttsProviderSelect.value,
+      endpoint: ttsEndpointInput.value.trim(),
+      apiKey: ttsApiKeyInput.value.trim() || null,
+      clearApiKey: ttsClearKeyInput.checked,
+      model: ttsModelInput.value.trim() || null,
+      voice: ttsVoiceInput.value.trim() || null,
+      mediaType: ttsMediaTypeSelect.value,
+      textLang: ttsTextLangInput.value.trim() || null,
+      refAudioPath: ttsRefAudioPathInput.value.trim() || null,
+      promptLang: ttsPromptLangInput.value.trim() || null,
+      promptText: ttsPromptTextInput.value.trim() || null,
+      speedFactor: clampTtsSpeed(Number(ttsSpeedInput.value)),
+      timeoutSecs: clampTtsTimeoutSeconds(Number(ttsTimeoutInput.value)),
+    };
+  }
+
+  async function saveTtsSettings(announce = true): Promise<TtsConfigView | null> {
+    ttsSaveButton.disabled = true;
+    ttsTestButton.disabled = true;
+    setTtsStatus("正在保存 AI 发声配置...", "idle");
+
+    try {
+      const config = await invoke<TtsConfigView>("save_tts_config", {
+        request: collectTtsConfigRequest(),
+      });
+      applyTtsConfig(config);
+      setTtsStatus(config.enabled ? "AI 发声配置已保存。" : "AI 发声配置已保存，但当前未启用。", "warm");
+      if (announce && config.enabled) {
+        setBubble("AI 发声已接入，之后回复会带声音。", "hint", 1700);
+      }
+      return config;
+    } catch (error) {
+      console.error(error);
+      setTtsStatus(`保存 AI 发声配置失败：${String(error)}`, "alert");
+      return null;
+    } finally {
+      ttsSaveButton.disabled = false;
+      ttsTestButton.disabled = false;
+    }
+  }
+
+  function stopAiSpeech(): void {
+    ttsPlaybackRequestId += 1;
+    if (activeSpeechAudio) {
+      activeSpeechAudio.pause();
+      activeSpeechAudio.src = "";
+      activeSpeechAudio = null;
+    }
+  }
+
   function stopVoiceRecognition(options: { persist?: boolean; announce?: boolean } = {}): void {
     state.voiceEnabled = false;
     voiceIntentionalStop = true;
@@ -2820,6 +2997,7 @@ window.addEventListener("DOMContentLoaded", () => {
     syncInteractionToolEditor();
     syncVoiceControls();
     void loadLlmSettings();
+    void loadTtsSettings();
   }
 
   function closeSettings(): void {
@@ -2924,6 +3102,29 @@ window.addEventListener("DOMContentLoaded", () => {
     } finally {
       setSettingsBusy(false);
     }
+  }
+
+  async function testTtsSettings(): Promise<void> {
+    const config = await saveTtsSettings(false);
+    if (!config) {
+      return;
+    }
+
+    ttsSaveButton.disabled = true;
+    ttsTestButton.disabled = true;
+    setTtsStatus("正在合成测试语音...", "idle");
+
+    const testLine = "AI 语音已经接入桌宠。";
+    startStreamingTalking(testLine);
+    const played = await playAiSpeech(testLine, { force: true, updateStatus: true });
+    if (played) {
+      setTtsStatus("测试语音已播放。", "warm");
+    } else {
+      finishStreamingTalking(1800);
+    }
+
+    ttsSaveButton.disabled = false;
+    ttsTestButton.disabled = false;
   }
 
   function getPetImagePointFromClient(clientX: number, clientY: number): MaskPoint | null {
@@ -3277,6 +3478,84 @@ window.addEventListener("DOMContentLoaded", () => {
     }, duration);
   }
 
+  async function playAiSpeech(text: string, options: { force?: boolean; updateStatus?: boolean } = {}): Promise<boolean> {
+    const speechText = text.trim();
+    if (!speechText || speechText === "·" || (!ttsPlaybackEnabled && !options.force)) {
+      return false;
+    }
+
+    const requestId = ++ttsPlaybackRequestId;
+    try {
+      const response = await invoke<TtsSynthesisResponse>("synthesize_speech", {
+        request: { text: speechText },
+      });
+      if (requestId !== ttsPlaybackRequestId) {
+        return false;
+      }
+
+      activeSpeechAudio?.pause();
+      const audio = new Audio(response.audioDataUrl);
+      activeSpeechAudio = audio;
+
+      audio.addEventListener("play", () => {
+        if (requestId !== ttsPlaybackRequestId) {
+          return;
+        }
+
+        clearTimer(state.surpriseTimeout);
+        clearTimer(state.bubbleTimeout);
+        state.talking = true;
+        state.surprised = false;
+        setBaseExpression("idle");
+        talkLayer.hidden = false;
+        mouthOLayer.hidden = true;
+        bubble.dataset.show = "true";
+        bubble.dataset.tone = "warm";
+        bubble.textContent = normalizeLlmReply(speechText) || speechText;
+        window.requestAnimationFrame(positionBubble);
+        if (options.updateStatus ?? false) {
+          setTtsStatus(`正在播放 ${response.provider} 语音。`, "warm");
+        }
+
+        const durationMs = Number.isFinite(audio.duration) && audio.duration > 0
+          ? Math.ceil(audio.duration * 1000)
+          : Math.max(1800, Math.min(5200, speechText.length * 160));
+        state.bubbleTimeout = window.setTimeout(() => {
+          bubble.dataset.show = "false";
+        }, durationMs + 700);
+        state.surpriseTimeout = window.setTimeout(() => {
+          if (requestId === ttsPlaybackRequestId) {
+            resetFaceLayers();
+          }
+        }, durationMs + 180);
+      });
+
+      audio.addEventListener("ended", () => {
+        if (requestId !== ttsPlaybackRequestId) {
+          return;
+        }
+
+        activeSpeechAudio = null;
+      });
+
+      audio.addEventListener("error", () => {
+        if (options.updateStatus ?? false) {
+          setTtsStatus("音频已合成，但 WebView 播放失败。", "alert");
+        }
+      });
+
+      await audio.play();
+      return true;
+    } catch (error) {
+      if (options.updateStatus ?? false) {
+        setTtsStatus(`AI 发声失败：${String(error)}`, "alert");
+      } else {
+        console.warn("AI speech playback failed:", error);
+      }
+      return false;
+    }
+  }
+
   async function runLlmInteraction(
     source: string,
     area?: string,
@@ -3355,6 +3634,7 @@ window.addEventListener("DOMContentLoaded", () => {
         updateStreamingTalking(reply);
       }
       finishStreamingTalking(response.record.llmUsed ? 2400 : 2600);
+      void playAiSpeech(reply);
 
       if (!historyPanel.hidden) {
         void refreshHistory();
@@ -3503,6 +3783,7 @@ window.addEventListener("DOMContentLoaded", () => {
     }, 120);
 
     setBubble(text, "warm", duration + 400);
+    void playAiSpeech(text);
     updateStatus();
 
     state.surpriseTimeout = window.setTimeout(() => {
@@ -3523,6 +3804,7 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function startSurprise(text: string, duration = 950): void {
+    stopAiSpeech();
     clearTimer(state.talkInterval);
     clearTimer(state.surpriseTimeout);
     state.talking = false;
@@ -4065,6 +4347,23 @@ window.addEventListener("DOMContentLoaded", () => {
     setVoiceStatus("正在重启语音监听...", "idle");
   });
 
+  ttsProviderSelect.addEventListener("change", () => {
+    syncTtsProviderFields();
+  });
+
+  ttsSpeedInput.addEventListener("input", () => {
+    const speed = clampTtsSpeed(Number(ttsSpeedInput.value));
+    ttsSpeedValue.textContent = `${Math.round(speed * 100)}%`;
+  });
+
+  ttsSaveButton.addEventListener("click", () => {
+    void saveTtsSettings();
+  });
+
+  ttsTestButton.addEventListener("click", () => {
+    void testTtsSettings();
+  });
+
   historyButton.addEventListener("click", () => {
     openHistory();
   });
@@ -4299,19 +4598,25 @@ window.addEventListener("DOMContentLoaded", () => {
     renderSkinDeleteOptions();
     syncInteractionToolEditor();
     syncVoiceControls();
+    void loadTtsSettings();
     void loadLlmSettings();
   } else if (IS_MOBILE_PET_WINDOW) {
     state.dockedToCorner = false;
     setCssScale(1);
     syncVoiceControls();
+    void loadTtsSettings();
   } else {
     void applyScale(savedScale, { persist: false, showBubble: false, ensureDocked: true });
+    void loadTtsSettings();
   }
   void loadCustomPetSkins(savedSkin);
 
   if (IS_PET_WINDOW) {
     void listen("pet-open-input", () => {
       openFloatingInput();
+    });
+    void listen<TtsConfigView>("tts-config-updated", (event) => {
+      applyTtsConfig(event.payload);
     });
   }
 

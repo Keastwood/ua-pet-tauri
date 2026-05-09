@@ -126,6 +126,98 @@
                   <button id="voice-restart-btn" class="settings-btn" type="button">重启监听</button>
                 </div>
               </div>
+
+              <div class="settings-subcard">
+                <h3>AI 发声</h3>
+                <label class="settings-check">
+                  <input id="tts-enabled-input" type="checkbox" />
+                  <span>桌宠回复后自动合成语音</span>
+                </label>
+
+                <label class="settings-field">
+                  <span>语音服务</span>
+                  <select id="tts-provider-select" class="skin-importer__select">
+                    <option value="gptSovits">GPT-SoVITS api_v2</option>
+                    <option value="openAiCompatible">OpenAI 兼容 /audio/speech</option>
+                    <option value="customJson">自定义 JSON 音频端点</option>
+                  </select>
+                </label>
+
+                <label class="settings-field">
+                  <span>服务地址</span>
+                  <input id="tts-endpoint-input" type="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:9880" />
+                </label>
+
+                <div class="settings-grid settings-grid--two">
+                  <label class="settings-field">
+                    <span>模型</span>
+                    <input id="tts-model-input" type="text" autocomplete="off" spellcheck="false" placeholder="tts-1 / gpt-4o-mini-tts" />
+                  </label>
+                  <label class="settings-field">
+                    <span>音色</span>
+                    <input id="tts-voice-input" type="text" autocomplete="off" spellcheck="false" placeholder="alloy / 自定义 voice" />
+                  </label>
+                </div>
+
+                <div class="settings-grid settings-grid--two">
+                  <label class="settings-field">
+                    <span>音频格式</span>
+                    <select id="tts-media-type-select" class="skin-importer__select">
+                      <option value="wav">wav</option>
+                      <option value="mp3">mp3</option>
+                      <option value="ogg">ogg</option>
+                      <option value="aac">aac</option>
+                    </select>
+                  </label>
+                  <label class="settings-field">
+                    <span>超时秒数</span>
+                    <input id="tts-timeout-input" type="number" min="5" max="300" step="1" value="60" />
+                  </label>
+                </div>
+
+                <label class="settings-field">
+                  <span>语速 <strong id="tts-speed-value">100%</strong></span>
+                  <input id="tts-speed-input" type="range" min="0.5" max="2" step="0.05" value="1" />
+                </label>
+
+                <div class="settings-grid settings-grid--two">
+                  <label class="settings-field">
+                    <span>文本语言</span>
+                    <input id="tts-text-lang-input" type="text" autocomplete="off" spellcheck="false" placeholder="zh / en / ja / auto" />
+                  </label>
+                  <label class="settings-field">
+                    <span>参考音频语言</span>
+                    <input id="tts-prompt-lang-input" type="text" autocomplete="off" spellcheck="false" placeholder="zh / en / ja" />
+                  </label>
+                </div>
+
+                <label class="settings-field">
+                  <span>GPT-SoVITS 参考音频路径</span>
+                  <input id="tts-ref-audio-path-input" type="text" autocomplete="off" spellcheck="false" placeholder="服务器上的 reference.wav 路径" />
+                </label>
+
+                <label class="settings-field">
+                  <span>参考音频文本</span>
+                  <textarea id="tts-prompt-text-input" rows="3" spellcheck="false" placeholder="参考音频对应文本；v3/v4 通常需要填写"></textarea>
+                </label>
+
+                <label class="settings-field">
+                  <span>API Key</span>
+                  <input id="tts-api-key-input" type="password" autocomplete="off" spellcheck="false" />
+                </label>
+
+                <label class="settings-check">
+                  <input id="tts-clear-key-input" type="checkbox" />
+                  <span>清除已保存的语音 API Key</span>
+                </label>
+
+                <p id="tts-status" class="settings-status" data-tone="idle">配置 GPT-SoVITS 或其他 HTTP 语音服务后，桌宠回复会自动播放语音。</p>
+
+                <div class="settings-actions settings-actions--spread">
+                  <button id="tts-save-btn" class="settings-btn settings-btn--primary" type="button">保存发声</button>
+                  <button id="tts-test-btn" class="settings-btn" type="button">测试发声</button>
+                </div>
+              </div>
             </section>
 
             <section class="settings-section" data-settings-section="skin" hidden>

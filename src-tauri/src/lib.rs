@@ -17,7 +17,9 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 const DEFAULT_LLM_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_LLM_TIMEOUT_SECS: u64 = 45;
+const DEFAULT_TTS_TIMEOUT_SECS: u64 = 60;
 const LLM_CONFIG_FILE: &str = "llm_config.json";
+const TTS_CONFIG_FILE: &str = "tts_config.json";
 const INTERACTION_HISTORY_FILE: &str = "interaction_history.json";
 const CUSTOM_SKINS_DIR: &str = "custom_skins";
 const MAX_HISTORY_RECORDS: usize = 240;
@@ -89,6 +91,76 @@ struct LlmConfigView {
     timeout_secs: u64,
     pet_interaction_system_prompt: String,
     default_pet_interaction_system_prompt: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredTtsConfig {
+    enabled: Option<bool>,
+    provider: Option<String>,
+    endpoint: Option<String>,
+    api_key: Option<String>,
+    model: Option<String>,
+    voice: Option<String>,
+    media_type: Option<String>,
+    text_lang: Option<String>,
+    ref_audio_path: Option<String>,
+    prompt_lang: Option<String>,
+    prompt_text: Option<String>,
+    speed_factor: Option<f32>,
+    timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveTtsConfigRequest {
+    enabled: bool,
+    provider: String,
+    endpoint: String,
+    api_key: Option<String>,
+    clear_api_key: bool,
+    model: Option<String>,
+    voice: Option<String>,
+    media_type: String,
+    text_lang: Option<String>,
+    ref_audio_path: Option<String>,
+    prompt_lang: Option<String>,
+    prompt_text: Option<String>,
+    speed_factor: f32,
+    timeout_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TtsConfigView {
+    enabled: bool,
+    provider: String,
+    endpoint: String,
+    has_api_key: bool,
+    masked_api_key: Option<String>,
+    model: String,
+    voice: String,
+    media_type: String,
+    text_lang: String,
+    ref_audio_path: String,
+    prompt_lang: String,
+    prompt_text: String,
+    speed_factor: f32,
+    timeout_secs: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TtsSynthesisRequest {
+    text: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TtsSynthesisResponse {
+    audio_data_url: String,
+    content_type: String,
+    provider: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -360,6 +432,44 @@ struct OpenAiCompatibleUsage {
     total_tokens: Option<u32>,
 }
 
+#[derive(Debug, Serialize)]
+struct GptSovitsTtsRequest<'a> {
+    text: &'a str,
+    text_lang: &'a str,
+    ref_audio_path: &'a str,
+    prompt_lang: &'a str,
+    prompt_text: &'a str,
+    media_type: &'a str,
+    speed_factor: f32,
+    streaming_mode: bool,
+    text_split_method: &'a str,
+    batch_size: u32,
+    split_bucket: bool,
+    parallel_infer: bool,
+    repetition_penalty: f32,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiCompatibleSpeechRequest<'a> {
+    model: &'a str,
+    voice: &'a str,
+    input: &'a str,
+    response_format: &'a str,
+    speed: f32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CustomJsonSpeechRequest<'a> {
+    text: &'a str,
+    input: &'a str,
+    model: Option<&'a str>,
+    voice: Option<&'a str>,
+    format: &'a str,
+    media_type: &'a str,
+    speed: f32,
+}
+
 impl From<OpenAiCompatibleUsage> for LlmUsage {
     fn from(usage: OpenAiCompatibleUsage) -> Self {
         Self {
@@ -399,6 +509,15 @@ fn llm_config_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|error| format!("获取应用配置目录失败：{error}"))?;
     fs::create_dir_all(&dir).map_err(|error| format!("创建应用配置目录失败：{error}"))?;
     Ok(dir.join(LLM_CONFIG_FILE))
+}
+
+fn tts_config_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| format!("获取应用配置目录失败：{error}"))?;
+    fs::create_dir_all(&dir).map_err(|error| format!("创建应用配置目录失败：{error}"))?;
+    Ok(dir.join(TTS_CONFIG_FILE))
 }
 
 fn interaction_history_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -511,6 +630,17 @@ fn load_stored_llm_config(app: &AppHandle) -> Result<StoredLlmConfig, String> {
         .map_err(|error| format!("解析 LLM 配置失败：{error}"))
 }
 
+fn load_stored_tts_config(app: &AppHandle) -> Result<StoredTtsConfig, String> {
+    let path = tts_config_path(app)?;
+    if !path.exists() {
+        return Ok(StoredTtsConfig::default());
+    }
+
+    let text = fs::read_to_string(&path).map_err(|error| format!("读取语音配置失败：{error}"))?;
+    serde_json::from_str::<StoredTtsConfig>(&text)
+        .map_err(|error| format!("解析语音配置失败：{error}"))
+}
+
 fn load_interaction_history(app: &AppHandle) -> Result<Vec<InteractionRecord>, String> {
     let path = interaction_history_path(app)?;
     if !path.exists() {
@@ -614,6 +744,13 @@ fn save_stored_llm_config(app: &AppHandle, config: &StoredLlmConfig) -> Result<(
     fs::write(&path, text).map_err(|error| format!("保存 LLM 配置失败：{error}"))
 }
 
+fn save_stored_tts_config(app: &AppHandle, config: &StoredTtsConfig) -> Result<(), String> {
+    let path = tts_config_path(app)?;
+    let text = serde_json::to_string_pretty(config)
+        .map_err(|error| format!("序列化语音配置失败：{error}"))?;
+    fs::write(&path, text).map_err(|error| format!("保存语音配置失败：{error}"))
+}
+
 fn mask_api_key(api_key: &str) -> String {
     let chars: Vec<char> = api_key.chars().collect();
     if chars.len() <= 8 {
@@ -648,6 +785,114 @@ fn config_view(config: &StoredLlmConfig) -> LlmConfigView {
         pet_interaction_system_prompt: clean_optional(config.pet_interaction_system_prompt.clone())
             .unwrap_or_default(),
         default_pet_interaction_system_prompt: DEFAULT_PET_INTERACTION_SYSTEM_PROMPT.to_string(),
+    }
+}
+
+fn normalize_tts_provider(provider: Option<String>) -> String {
+    match provider
+        .as_deref()
+        .unwrap_or("gptSovits")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "openai" | "openaicompatible" | "openai-compatible" | "open_ai_compatible" => {
+            "openAiCompatible".to_string()
+        }
+        "custom" | "customjson" | "custom-json" | "custom_json" => "customJson".to_string(),
+        _ => "gptSovits".to_string(),
+    }
+}
+
+fn normalize_tts_media_type(media_type: Option<String>) -> String {
+    match media_type
+        .as_deref()
+        .unwrap_or("wav")
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "mp3" => "mp3".to_string(),
+        "ogg" => "ogg".to_string(),
+        "opus" => "opus".to_string(),
+        "aac" => "aac".to_string(),
+        "flac" => "flac".to_string(),
+        "pcm" => "pcm".to_string(),
+        "raw" => "raw".to_string(),
+        _ => "wav".to_string(),
+    }
+}
+
+fn content_type_for_audio(media_type: &str) -> String {
+    match media_type {
+        "mp3" => "audio/mpeg",
+        "ogg" => "audio/ogg",
+        "opus" => "audio/ogg; codecs=opus",
+        "aac" => "audio/aac",
+        "flac" => "audio/flac",
+        "pcm" | "raw" => "audio/wav",
+        _ => "audio/wav",
+    }
+    .to_string()
+}
+
+fn tts_config_view(config: &StoredTtsConfig) -> TtsConfigView {
+    let api_key = clean_optional(config.api_key.clone()).or_else(|| read_env(&["TTS_API_KEY"]));
+    let provider = normalize_tts_provider(config.provider.clone());
+    let media_type = normalize_tts_media_type(config.media_type.clone());
+    let speed_factor = config
+        .speed_factor
+        .filter(|value| value.is_finite())
+        .unwrap_or(1.0)
+        .clamp(0.5, 2.0);
+    let timeout_secs = config.timeout_secs.unwrap_or_else(|| {
+        parse_env_u64("TTS_TIMEOUT_SECS", DEFAULT_TTS_TIMEOUT_SECS)
+            .unwrap_or(DEFAULT_TTS_TIMEOUT_SECS)
+    });
+
+    TtsConfigView {
+        enabled: config.enabled.unwrap_or(false),
+        provider,
+        endpoint: clean_optional(config.endpoint.clone())
+            .or_else(|| read_env(&["TTS_ENDPOINT", "GPT_SOVITS_ENDPOINT"]))
+            .unwrap_or_else(|| "http://127.0.0.1:9880".to_string()),
+        has_api_key: api_key.is_some(),
+        masked_api_key: api_key.as_deref().map(mask_api_key),
+        model: clean_optional(config.model.clone())
+            .or_else(|| read_env(&["TTS_MODEL"]))
+            .unwrap_or_default(),
+        voice: clean_optional(config.voice.clone())
+            .or_else(|| read_env(&["TTS_VOICE"]))
+            .unwrap_or_else(|| "alloy".to_string()),
+        media_type,
+        text_lang: clean_optional(config.text_lang.clone()).unwrap_or_else(|| "zh".to_string()),
+        ref_audio_path: clean_optional(config.ref_audio_path.clone()).unwrap_or_default(),
+        prompt_lang: clean_optional(config.prompt_lang.clone()).unwrap_or_else(|| "zh".to_string()),
+        prompt_text: clean_optional(config.prompt_text.clone()).unwrap_or_default(),
+        speed_factor,
+        timeout_secs: timeout_secs.clamp(5, 300),
+    }
+}
+
+fn tts_endpoint_url(provider: &str, endpoint: &str) -> String {
+    let trimmed = endpoint.trim().trim_end_matches('/');
+    if provider == "gptSovits" {
+        if trimmed.ends_with("/tts") {
+            trimmed.to_string()
+        } else {
+            format!("{trimmed}/tts")
+        }
+    } else if provider == "openAiCompatible" {
+        if trimmed.ends_with("/audio/speech") {
+            trimmed.to_string()
+        } else if trimmed.ends_with("/v1") {
+            format!("{trimmed}/audio/speech")
+        } else {
+            format!("{trimmed}/v1/audio/speech")
+        }
+    } else {
+        trimmed.to_string()
     }
 }
 
@@ -909,6 +1154,183 @@ fn validate_llm_request(request: &LlmChatRequest) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn validate_tts_config(config: &TtsConfigView) -> Result<(), String> {
+    if !(config.endpoint.starts_with("https://") || config.endpoint.starts_with("http://")) {
+        return Err("语音服务地址需要以 http:// 或 https:// 开头。".to_string());
+    }
+
+    if !(5..=300).contains(&config.timeout_secs) {
+        return Err("语音超时时间需要在 5 到 300 秒之间。".to_string());
+    }
+
+    if !(0.5..=2.0).contains(&config.speed_factor) {
+        return Err("语速需要在 0.5 到 2.0 之间。".to_string());
+    }
+
+    if config.enabled && config.provider == "gptSovits" {
+        if config.ref_audio_path.trim().is_empty() {
+            return Err("GPT-SoVITS 需要填写参考音频路径。".to_string());
+        }
+        if config.prompt_lang.trim().is_empty() || config.text_lang.trim().is_empty() {
+            return Err("GPT-SoVITS 需要填写文本语言和参考音频语言。".to_string());
+        }
+    }
+
+    if config.enabled
+        && config.provider == "openAiCompatible"
+        && (config.model.trim().is_empty() || config.voice.trim().is_empty())
+    {
+        return Err("OpenAI 兼容语音需要填写模型和音色。".to_string());
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn get_tts_config(app: AppHandle) -> Result<TtsConfigView, String> {
+    let config = load_stored_tts_config(&app)?;
+    Ok(tts_config_view(&config))
+}
+
+#[tauri::command]
+fn save_tts_config(app: AppHandle, request: SaveTtsConfigRequest) -> Result<TtsConfigView, String> {
+    let mut stored = load_stored_tts_config(&app)?;
+    stored.enabled = Some(request.enabled);
+    stored.provider = Some(normalize_tts_provider(Some(request.provider)));
+    stored.endpoint = Some(clean_required(&request.endpoint, "语音服务地址")?);
+    stored.model = clean_optional(request.model);
+    stored.voice = clean_optional(request.voice);
+    stored.media_type = Some(normalize_tts_media_type(Some(request.media_type)));
+    stored.text_lang = clean_optional(request.text_lang);
+    stored.ref_audio_path = clean_optional(request.ref_audio_path);
+    stored.prompt_lang = clean_optional(request.prompt_lang);
+    stored.prompt_text = clean_optional(request.prompt_text);
+    stored.speed_factor = Some(request.speed_factor.clamp(0.5, 2.0));
+    stored.timeout_secs = Some(request.timeout_secs.clamp(5, 300));
+
+    if request.clear_api_key {
+        stored.api_key = None;
+    } else if let Some(api_key) = clean_optional(request.api_key) {
+        stored.api_key = Some(api_key);
+    }
+
+    let view = tts_config_view(&stored);
+    validate_tts_config(&view)?;
+    save_stored_tts_config(&app, &stored)?;
+    let _ = app.emit("tts-config-updated", view.clone());
+    Ok(view)
+}
+
+#[tauri::command]
+async fn synthesize_speech(
+    app: AppHandle,
+    request: TtsSynthesisRequest,
+) -> Result<TtsSynthesisResponse, String> {
+    let text = request.text.trim();
+    if text.is_empty() {
+        return Err("要合成的文本不能为空。".to_string());
+    }
+
+    let stored = load_stored_tts_config(&app)?;
+    let mut config = tts_config_view(&stored);
+    config.enabled = true;
+    validate_tts_config(&config)?;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(config.timeout_secs))
+        .build()
+        .map_err(|error| format!("创建语音 HTTP 客户端失败：{error}"))?;
+    let url = tts_endpoint_url(&config.provider, &config.endpoint);
+    let api_key = clean_optional(stored.api_key).or_else(|| read_env(&["TTS_API_KEY"]));
+
+    let mut request_builder = client.post(url);
+    if let Some(api_key) = api_key {
+        request_builder = request_builder.bearer_auth(api_key);
+    }
+
+    let response = match config.provider.as_str() {
+        "gptSovits" => {
+            let payload = GptSovitsTtsRequest {
+                text,
+                text_lang: &config.text_lang,
+                ref_audio_path: &config.ref_audio_path,
+                prompt_lang: &config.prompt_lang,
+                prompt_text: &config.prompt_text,
+                media_type: &config.media_type,
+                speed_factor: config.speed_factor,
+                streaming_mode: false,
+                text_split_method: "cut5",
+                batch_size: 1,
+                split_bucket: true,
+                parallel_infer: true,
+                repetition_penalty: 1.35,
+            };
+            request_builder.json(&payload).send().await
+        }
+        "openAiCompatible" => {
+            let payload = OpenAiCompatibleSpeechRequest {
+                model: &config.model,
+                voice: &config.voice,
+                input: text,
+                response_format: &config.media_type,
+                speed: config.speed_factor,
+            };
+            request_builder.json(&payload).send().await
+        }
+        _ => {
+            let model = clean_optional(Some(config.model.clone()));
+            let voice = clean_optional(Some(config.voice.clone()));
+            let payload = CustomJsonSpeechRequest {
+                text,
+                input: text,
+                model: model.as_deref(),
+                voice: voice.as_deref(),
+                format: &config.media_type,
+                media_type: &config.media_type,
+                speed: config.speed_factor,
+            };
+            request_builder.json(&payload).send().await
+        }
+    }
+    .map_err(|error| format!("请求语音服务失败：{error}"))?;
+
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = response
+        .bytes()
+        .await
+        .map_err(|error| format!("读取语音服务响应失败：{error}"))?;
+
+    if !status.is_success() {
+        let text = String::from_utf8_lossy(&body);
+        return Err(format!(
+            "语音服务返回错误 {status}：{}",
+            truncate_error_body(&text)
+        ));
+    }
+
+    if body.is_empty() {
+        return Err("语音服务返回了空音频。".to_string());
+    }
+
+    let content_type = headers
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.split(';').next().unwrap_or(value).trim().to_string())
+        .filter(|value| value.starts_with("audio/"))
+        .unwrap_or_else(|| content_type_for_audio(&config.media_type));
+    let audio_data_url = format!(
+        "data:{content_type};base64,{}",
+        general_purpose::STANDARD.encode(&body)
+    );
+
+    Ok(TtsSynthesisResponse {
+        audio_data_url,
+        content_type,
+        provider: config.provider,
+    })
 }
 
 #[tauri::command]
@@ -1870,12 +2292,15 @@ pub fn run() {
             get_interaction_history,
             get_pet_cursor_position,
             get_pet_window_position,
+            get_tts_config,
             list_custom_skins,
             llm_chat,
             llm_pet_interact,
             llm_pet_interact_stream,
             save_llm_config,
+            save_tts_config,
             save_custom_skin,
+            synthesize_speech,
             move_pet_window,
             open_mask_editor,
             open_settings_menu,
