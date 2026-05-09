@@ -23,6 +23,8 @@ const MAX_HISTORY_RECORDS: usize = 240;
 const PET_INPUT_SHORTCUT_LABEL: &str = "Ctrl+Alt+Space";
 const SETTINGS_MENU_WIDTH: f64 = 430.0;
 const SETTINGS_MENU_HEIGHT: f64 = 720.0;
+const SETTINGS_MENU_ANCHOR_GAP: f64 = 8.0;
+const SETTINGS_MENU_WINDOW_EDGE_ALLOWANCE: f64 = 80.0;
 const DEFAULT_PET_INTERACTION_SYSTEM_PROMPT: &str = "你是银白发桌宠，正在和用户互动。用户会先选择一个交互控件，例如手指、手掌、嘴、脚、羽毛、梳子或零食，再点击桌宠的具体部位。请参考控件、部位、坐标和最近交互历史，用中文给出一句自然、温柔、俏皮的桌宠回应。回复不超过 42 个汉字，不要解释，不要加引号。";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -104,6 +106,7 @@ struct WinPoint {
 #[link(name = "user32")]
 extern "system" {
     fn GetCursorPos(point: *mut WinPoint) -> i32;
+    fn GetSystemMetrics(index: i32) -> i32;
 }
 
 #[cfg(target_os = "windows")]
@@ -119,6 +122,34 @@ fn global_cursor_position_physical() -> Option<(f64, f64)> {
 
 #[cfg(not(target_os = "windows"))]
 fn global_cursor_position_physical() -> Option<(f64, f64)> {
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn virtual_screen_bounds() -> Option<(f64, f64, f64, f64)> {
+    const SM_XVIRTUALSCREEN: i32 = 76;
+    const SM_YVIRTUALSCREEN: i32 = 77;
+    const SM_CXVIRTUALSCREEN: i32 = 78;
+    const SM_CYVIRTUALSCREEN: i32 = 79;
+
+    let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
+    let top = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
+    let width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
+    let height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
+    if width <= 0 || height <= 0 {
+        None
+    } else {
+        Some((
+            f64::from(left),
+            f64::from(top),
+            f64::from(left + width),
+            f64::from(top + height),
+        ))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn virtual_screen_bounds() -> Option<(f64, f64, f64, f64)> {
     None
 }
 
@@ -1588,10 +1619,14 @@ async fn open_mask_editor(app: AppHandle) -> Result<(), String> {
     .map_err(|error| error.to_string())
 }
 
-fn settings_menu_position(app: &AppHandle) -> Option<PhysicalPosition<i32>> {
-    let (cursor_x, cursor_y) = global_cursor_position_physical()?;
+fn settings_menu_position(
+    app: &AppHandle,
+    anchor: Option<(f64, f64)>,
+    menu_size: Option<(f64, f64)>,
+) -> Option<PhysicalPosition<i32>> {
+    let (anchor_x, anchor_y) = anchor.or_else(global_cursor_position_physical)?;
     let monitors = app.available_monitors().ok()?;
-    let monitor = monitors
+    let monitor_scale_factor = monitors
         .iter()
         .find(|monitor| {
             let position = monitor.position();
@@ -1600,52 +1635,99 @@ fn settings_menu_position(app: &AppHandle) -> Option<PhysicalPosition<i32>> {
             let top = f64::from(position.y);
             let right = left + f64::from(size.width);
             let bottom = top + f64::from(size.height);
-            cursor_x >= left && cursor_x <= right && cursor_y >= top && cursor_y <= bottom
+            anchor_x >= left && anchor_x <= right && anchor_y >= top && anchor_y <= bottom
         })
-        .or_else(|| monitors.first())?;
+        .map(|monitor| monitor.scale_factor())
+        .or_else(|| monitors.first().map(|monitor| monitor.scale_factor()))?;
 
-    let scale_factor = monitor.scale_factor();
-    let menu_width = (SETTINGS_MENU_WIDTH * scale_factor).round();
-    let menu_height = (SETTINGS_MENU_HEIGHT * scale_factor).round();
-    let monitor_position = monitor.position();
-    let monitor_size = monitor.size();
-    let min_x = f64::from(monitor_position.x);
-    let min_y = f64::from(monitor_position.y);
-    let max_x = min_x + f64::from(monitor_size.width) - menu_width;
-    let max_y = min_y + f64::from(monitor_size.height) - menu_height;
-    let x = (cursor_x + 8.0).clamp(min_x, max_x.max(min_x)).round() as i32;
-    let y = (cursor_y + 8.0).clamp(min_y, max_y.max(min_y)).round() as i32;
+    let (min_x, min_y, right, bottom) = virtual_screen_bounds().unwrap_or_else(|| {
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut right = f64::NEG_INFINITY;
+        let mut bottom = f64::NEG_INFINITY;
+        for monitor in &monitors {
+            let position = monitor.position();
+            let size = monitor.size();
+            let left = f64::from(position.x);
+            let top = f64::from(position.y);
+            min_x = min_x.min(left);
+            min_y = min_y.min(top);
+            right = right.max(left + f64::from(size.width));
+            bottom = bottom.max(top + f64::from(size.height));
+        }
+
+        (min_x, min_y, right, bottom)
+    });
+
+    if !min_x.is_finite() || !min_y.is_finite() || !right.is_finite() || !bottom.is_finite() {
+        return None;
+    }
+
+    let (menu_width, menu_height) = menu_size.unwrap_or_else(|| {
+        (
+            (SETTINGS_MENU_WIDTH * monitor_scale_factor).round(),
+            (SETTINGS_MENU_HEIGHT * monitor_scale_factor).round(),
+        )
+    });
+    let menu_width = menu_width + SETTINGS_MENU_WINDOW_EDGE_ALLOWANCE;
+    let menu_height = menu_height + SETTINGS_MENU_WINDOW_EDGE_ALLOWANCE;
+    let gap = (SETTINGS_MENU_ANCHOR_GAP * monitor_scale_factor).round();
+    let preferred_x = if anchor_x + gap + menu_width <= right {
+        anchor_x + gap
+    } else {
+        anchor_x - menu_width - gap
+    };
+    let preferred_y = if anchor_y + gap + menu_height <= bottom {
+        anchor_y + gap
+    } else {
+        anchor_y - menu_height - gap
+    };
+    let x = preferred_x.round() as i32;
+    let y = preferred_y.round() as i32;
 
     Some(PhysicalPosition::new(x, y))
 }
 
 #[tauri::command]
-async fn open_settings_menu(app: AppHandle) -> Result<(), String> {
+async fn open_settings_menu(app: AppHandle, anchor_x: Option<f64>, anchor_y: Option<f64>) -> Result<(), String> {
+    let anchor = anchor_x.zip(anchor_y);
     if let Some(window) = app.get_webview_window("settings-menu") {
-        if let Some(position) = settings_menu_position(&app) {
+        let _ = window.hide();
+        let menu_size = window
+            .outer_size()
+            .ok()
+            .map(|size| (f64::from(size.width), f64::from(size.height)));
+        if let Some(position) = settings_menu_position(&app, anchor, menu_size) {
             let _ = window.set_position(Position::Physical(position));
         }
-        let _ = window.show();
+        window.show().map_err(|error| error.to_string())?;
         return window.set_focus().map_err(|error| error.to_string());
     }
 
-    let mut builder = WebviewWindowBuilder::new(&app, "settings-menu", settings_menu_url()?)
+    let window = WebviewWindowBuilder::new(&app, "settings-menu", settings_menu_url()?)
         .title("Silver Pet Settings")
         .inner_size(SETTINGS_MENU_WIDTH, SETTINGS_MENU_HEIGHT)
         .resizable(false)
         .decorations(false)
         .transparent(true)
         .always_on_top(true)
-        .skip_taskbar(true);
+        .skip_taskbar(true)
+        .visible(false)
+        .build()
+        .map_err(|error| error.to_string())?;
 
-    if let Some(position) = settings_menu_position(&app) {
-        builder = builder.position(f64::from(position.x), f64::from(position.y));
+    let menu_size = window
+        .outer_size()
+        .ok()
+        .map(|size| (f64::from(size.width), f64::from(size.height)));
+    if let Some(position) = settings_menu_position(&app, anchor, menu_size) {
+        window
+            .set_position(Position::Physical(position))
+            .map_err(|error| error.to_string())?;
     }
 
-    builder
-        .build()
-        .map(|_| ())
-        .map_err(|error| error.to_string())
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

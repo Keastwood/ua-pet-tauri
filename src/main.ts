@@ -959,8 +959,11 @@ async function openMaskEditorWindow(): Promise<void> {
   await invoke("open_mask_editor");
 }
 
-async function openSettingsMenuWindow(): Promise<void> {
-  await invoke("open_settings_menu");
+async function openSettingsMenuWindow(anchor?: { x: number; y: number }): Promise<void> {
+  await invoke("open_settings_menu", {
+    anchorX: anchor?.x,
+    anchorY: anchor?.y,
+  });
 }
 
 async function moveWindowToDesktopCorner(scale = state.scale): Promise<void> {
@@ -2735,10 +2738,10 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function openSettings(): void {
+  function openSettings(anchor?: { x: number; y: number }): void {
     forceCaptureCursorEvents();
     if (IS_PET_WINDOW) {
-      void openSettingsMenuWindow().catch((error) => {
+      void openSettingsMenuWindow(anchor).catch((error) => {
         console.error(error);
         setBubble("右键菜单打开失败了。", "alert", 1800);
       });
