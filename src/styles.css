@@ -1399,6 +1399,49 @@ body[data-view="mask-editor"] .mask-editor__stage {
   max-height: calc(100vh - 390px);
 }
 
+body[data-view="settings-menu"] {
+  align-items: stretch;
+  justify-content: stretch;
+  background: transparent;
+}
+
+body[data-view="settings-menu"] .window-shell {
+  width: 100vw;
+  height: 100vh;
+  zoom: 1;
+}
+
+body[data-view="settings-menu"] .pet-app {
+  padding: 12px;
+}
+
+body[data-view="settings-menu"] .speech-bubble,
+body[data-view="settings-menu"] .history-panel,
+body[data-view="settings-menu"] .floating-input,
+body[data-view="settings-menu"] .pet-stage,
+body[data-view="settings-menu"] .side-dock {
+  display: none;
+}
+
+body[data-view="settings-menu"] .settings-panel {
+  inset: 0;
+  display: flex;
+  padding: 12px;
+  opacity: 1;
+  pointer-events: auto;
+  zoom: 1;
+  transform: none;
+}
+
+body[data-view="settings-menu"] .settings-card {
+  width: min(100%, 406px);
+  max-height: calc(100vh - 24px);
+}
+
+body[data-view="settings-menu"] .settings-section[data-settings-section="mask"] {
+  display: none;
+}
+
 .skin-importer--settings {
   margin: 0;
   padding: 0;

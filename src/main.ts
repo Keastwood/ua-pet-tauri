@@ -17,6 +17,11 @@ const IS_MASK_EDITOR_WINDOW =
   getCurrentWindowLabel() === "mask-editor" ||
   new URLSearchParams(window.location.search).get("view") === "mask-editor" ||
   window.location.hash === "#mask-editor";
+const IS_SETTINGS_MENU_WINDOW =
+  getCurrentWindowLabel() === "settings-menu" ||
+  new URLSearchParams(window.location.search).get("view") === "settings-menu" ||
+  window.location.hash === "#settings-menu";
+const IS_PET_WINDOW = !IS_MASK_EDITOR_WINDOW && !IS_SETTINGS_MENU_WINDOW;
 
 type Tone = "warm" | "alert" | "hint";
 type BaseExpression = "idle" | "surprised";
@@ -954,6 +959,10 @@ async function openMaskEditorWindow(): Promise<void> {
   await invoke("open_mask_editor");
 }
 
+async function openSettingsMenuWindow(): Promise<void> {
+  await invoke("open_settings_menu");
+}
+
 async function moveWindowToDesktopCorner(scale = state.scale): Promise<void> {
   const marginX = 28;
   const marginY = 54;
@@ -964,7 +973,7 @@ async function moveWindowToDesktopCorner(scale = state.scale): Promise<void> {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
-  document.body.dataset.view = IS_MASK_EDITOR_WINDOW ? "mask-editor" : "pet";
+  document.body.dataset.view = IS_MASK_EDITOR_WINDOW ? "mask-editor" : IS_SETTINGS_MENU_WINDOW ? "settings-menu" : "pet";
   const petApp = must<HTMLElement>(".pet-app");
   const petRoot = must<HTMLDivElement>("#pet");
   const petStage = must<HTMLDivElement>("#pet-stage");
@@ -2728,6 +2737,14 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function openSettings(): void {
     forceCaptureCursorEvents();
+    if (IS_PET_WINDOW) {
+      void openSettingsMenuWindow().catch((error) => {
+        console.error(error);
+        setBubble("右键菜单打开失败了。", "alert", 1800);
+      });
+      return;
+    }
+
     if (IS_MASK_EDITOR_WINDOW) {
       settingsPanel.hidden = false;
       settingsPanel.dataset.show = "true";
@@ -2745,7 +2762,7 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function closeSettings(): void {
-    if (IS_MASK_EDITOR_WINDOW) {
+    if (IS_MASK_EDITOR_WINDOW || IS_SETTINGS_MENU_WINDOW) {
       void closePet();
       return;
     }
@@ -4115,25 +4132,33 @@ window.addEventListener("DOMContentLoaded", () => {
   setInteractionTool(savedInteractionTool, { persist: false });
   state.voiceEnabled = savedVoiceEnabled;
   syncVoiceControls();
-  if (savedVoiceEnabled && !IS_MASK_EDITOR_WINDOW) {
+  if (savedVoiceEnabled && IS_PET_WINDOW) {
     void startVoiceRecognition({ persist: false, announce: false });
   }
   if (IS_MASK_EDITOR_WINDOW) {
     settingsPanel.hidden = false;
     settingsPanel.dataset.show = "true";
     loadMaskEditorForSkin(findPetSkin(savedSkin));
+  } else if (IS_SETTINGS_MENU_WINDOW) {
+    settingsPanel.hidden = false;
+    settingsPanel.dataset.show = "true";
+    renderSkinPromptOptions();
+    renderSkinDeleteOptions();
+    syncInteractionToolEditor();
+    syncVoiceControls();
+    void loadLlmSettings();
   } else {
     void applyScale(savedScale, { persist: false, showBubble: false, ensureDocked: true });
   }
   void loadCustomPetSkins(savedSkin);
 
-  if (!IS_MASK_EDITOR_WINDOW) {
+  if (IS_PET_WINDOW) {
     void listen("pet-open-input", () => {
       openFloatingInput();
     });
   }
 
-  if (!IS_MASK_EDITOR_WINDOW) {
+  if (IS_PET_WINDOW) {
     window.setInterval(() => {
       void syncPointerPassthrough();
     }, POINTER_PASSTHROUGH_INTERVAL_MS);

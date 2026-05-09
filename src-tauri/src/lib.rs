@@ -21,6 +21,8 @@ const INTERACTION_HISTORY_FILE: &str = "interaction_history.json";
 const CUSTOM_SKINS_DIR: &str = "custom_skins";
 const MAX_HISTORY_RECORDS: usize = 240;
 const PET_INPUT_SHORTCUT_LABEL: &str = "Ctrl+Alt+Space";
+const SETTINGS_MENU_WIDTH: f64 = 430.0;
+const SETTINGS_MENU_HEIGHT: f64 = 720.0;
 const DEFAULT_PET_INTERACTION_SYSTEM_PROMPT: &str = "你是银白发桌宠，正在和用户互动。用户会先选择一个交互控件，例如手指、手掌、嘴、脚、羽毛、梳子或零食，再点击桌宠的具体部位。请参考控件、部位、坐标和最近交互历史，用中文给出一句自然、温柔、俏皮的桌宠回应。回复不超过 42 个汉字，不要解释，不要加引号。";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1552,6 +1554,17 @@ fn mask_editor_url() -> Result<WebviewUrl, String> {
     }
 }
 
+fn settings_menu_url() -> Result<WebviewUrl, String> {
+    if cfg!(debug_assertions) {
+        "http://localhost:1420/?view=settings-menu"
+            .parse()
+            .map(WebviewUrl::External)
+            .map_err(|error| format!("invalid settings menu dev url: {error}"))
+    } else {
+        Ok(WebviewUrl::App("index.html?view=settings-menu".into()))
+    }
+}
+
 #[tauri::command]
 async fn open_mask_editor(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("mask-editor") {
@@ -1573,6 +1586,66 @@ async fn open_mask_editor(app: AppHandle) -> Result<(), String> {
     .build()
     .map(|_| ())
     .map_err(|error| error.to_string())
+}
+
+fn settings_menu_position(app: &AppHandle) -> Option<PhysicalPosition<i32>> {
+    let (cursor_x, cursor_y) = global_cursor_position_physical()?;
+    let monitors = app.available_monitors().ok()?;
+    let monitor = monitors
+        .iter()
+        .find(|monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
+            let left = f64::from(position.x);
+            let top = f64::from(position.y);
+            let right = left + f64::from(size.width);
+            let bottom = top + f64::from(size.height);
+            cursor_x >= left && cursor_x <= right && cursor_y >= top && cursor_y <= bottom
+        })
+        .or_else(|| monitors.first())?;
+
+    let scale_factor = monitor.scale_factor();
+    let menu_width = (SETTINGS_MENU_WIDTH * scale_factor).round();
+    let menu_height = (SETTINGS_MENU_HEIGHT * scale_factor).round();
+    let monitor_position = monitor.position();
+    let monitor_size = monitor.size();
+    let min_x = f64::from(monitor_position.x);
+    let min_y = f64::from(monitor_position.y);
+    let max_x = min_x + f64::from(monitor_size.width) - menu_width;
+    let max_y = min_y + f64::from(monitor_size.height) - menu_height;
+    let x = (cursor_x + 8.0).clamp(min_x, max_x.max(min_x)).round() as i32;
+    let y = (cursor_y + 8.0).clamp(min_y, max_y.max(min_y)).round() as i32;
+
+    Some(PhysicalPosition::new(x, y))
+}
+
+#[tauri::command]
+async fn open_settings_menu(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("settings-menu") {
+        if let Some(position) = settings_menu_position(&app) {
+            let _ = window.set_position(Position::Physical(position));
+        }
+        let _ = window.show();
+        return window.set_focus().map_err(|error| error.to_string());
+    }
+
+    let mut builder = WebviewWindowBuilder::new(&app, "settings-menu", settings_menu_url()?)
+        .title("Silver Pet Settings")
+        .inner_size(SETTINGS_MENU_WIDTH, SETTINGS_MENU_HEIGHT)
+        .resizable(false)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true);
+
+    if let Some(position) = settings_menu_position(&app) {
+        builder = builder.position(f64::from(position.x), f64::from(position.y));
+    }
+
+    builder
+        .build()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1614,6 +1687,7 @@ pub fn run() {
             save_custom_skin,
             move_pet_window,
             open_mask_editor,
+            open_settings_menu,
             resize_pet_window,
             set_pet_always_on_top,
             set_pet_ignore_cursor_events,
