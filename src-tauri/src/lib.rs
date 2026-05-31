@@ -2841,13 +2841,26 @@ fn set_pet_ignore_cursor_events(_window: Window, _ignore: bool) -> Result<(), St
 
 #[tauri::command]
 #[cfg(not(mobile))]
-fn close_pet(window: Window) -> Result<(), String> {
+fn close_current_window(window: Window) -> Result<(), String> {
     window.close().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 #[cfg(mobile)]
-fn close_pet(_window: Window) -> Result<(), String> {
+fn close_current_window(_window: Window) -> Result<(), String> {
+    Ok(())
+}
+
+#[tauri::command]
+#[cfg(not(mobile))]
+fn close_pet(app: AppHandle) -> Result<(), String> {
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
+#[cfg(mobile)]
+fn close_pet(_app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
@@ -3063,6 +3076,7 @@ pub fn run() {
         .manage(ManagedGptSovitsState::default())
         .invoke_handler(tauri::generate_handler![
             clear_interaction_history,
+            close_current_window,
             delete_custom_skin,
             get_llm_config,
             get_interaction_history,

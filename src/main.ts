@@ -1072,6 +1072,10 @@ async function closePet(): Promise<void> {
   await invoke("close_pet");
 }
 
+async function closeCurrentWindow(): Promise<void> {
+  await invoke("close_current_window");
+}
+
 async function getPetWindowPosition(): Promise<WindowPosition> {
   return invoke<WindowPosition>("get_pet_window_position");
 }
@@ -3463,7 +3467,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function closeSettings(): void {
     if (IS_MASK_EDITOR_WINDOW || IS_SETTINGS_MENU_WINDOW) {
-      void closePet();
+      void closeCurrentWindow();
       return;
     }
 
