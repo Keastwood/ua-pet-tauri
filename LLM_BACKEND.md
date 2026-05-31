@@ -84,6 +84,8 @@ For managed GPT-SoVITS, `list_tts_assets` scans local weight and audio folders s
 
 When AI voice is enabled, the frontend calls `synthesize_speech` after a reply is ready and plays the returned audio data URL while keeping the mouth animation active. The feature is HTTP-based, so GPT-SoVITS, local voice changers, and hosted TTS bridges can be swapped without changing the desktop pet code.
 
+If microphone listening is enabled at the same time, the frontend gates recognition around its own audio output: it aborts active Web Speech recognition before playback, suppresses recognition during playback and a short cooldown, then restarts listening automatically. It also keeps a short-lived cache of recently spoken assistant text and drops highly similar transcripts, which prevents speaker output from feeding back into the LLM as a new voice command.
+
 ## Interaction Tools
 
 The current selectable tools are defined in `src/main.ts` as `INTERACTION_TOOLS`:

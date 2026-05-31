@@ -326,6 +326,9 @@ const PET_BODY_MASKS_STORAGE_KEY = "silver-pet.body-masks.v1";
 const VOICE_ENABLED_STORAGE_KEY = "silver-pet.voice-enabled.v1";
 const VOICE_SENSITIVITY_STORAGE_KEY = "silver-pet.voice-sensitivity.v1";
 const VOICE_LANGUAGE_STORAGE_KEY = "silver-pet.voice-language.v1";
+const VOICE_SELF_SPEECH_COOLDOWN_MS = 1400;
+const VOICE_RECENT_AI_SPEECH_TTL_MS = 12_000;
+const VOICE_SELF_SPEECH_SIMILARITY_THRESHOLD = 0.72;
 const MAX_FAVORITE_SKINS = 4;
 const PET_LLM_SYSTEM_PROMPT =
   "你是一个银白发桌宠，会陪用户工作和休息。请用中文回复，语气温柔、俏皮、像桌宠在说话。每次只说一句，控制在 36 个汉字以内，不要解释，不要加引号。";
@@ -923,6 +926,53 @@ function shouldAcceptVoiceTranscript(transcript: string, confidence: number, sen
   return confidence >= getVoiceConfidenceThreshold(sensitivity);
 }
 
+function normalizeVoiceGuardText(value: string): string {
+  return value
+    .toLocaleLowerCase()
+    .replace(/[\s"'“”‘’.,!?！？。、「」『』（）()【】\[\]<>《》:：;；~～…·、，]/g, "");
+}
+
+function getLcsLength(left: string, right: string): number {
+  if (!left || !right) {
+    return 0;
+  }
+
+  const previous = new Array(right.length + 1).fill(0);
+  const current = new Array(right.length + 1).fill(0);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      current[rightIndex] = left[leftIndex - 1] === right[rightIndex - 1]
+        ? previous[rightIndex - 1] + 1
+        : Math.max(previous[rightIndex], current[rightIndex - 1]);
+    }
+    previous.splice(0, previous.length, ...current);
+    current.fill(0);
+  }
+
+  return previous[right.length];
+}
+
+function getVoiceTextSimilarity(left: string, right: string): number {
+  const a = normalizeVoiceGuardText(left);
+  const b = normalizeVoiceGuardText(right);
+  if (!a || !b) {
+    return 0;
+  }
+
+  if (a === b) {
+    return 1;
+  }
+
+  const shorter = a.length <= b.length ? a : b;
+  const longer = a.length > b.length ? a : b;
+  if (shorter.length >= 6 && longer.includes(shorter)) {
+    return 0.94;
+  }
+
+  const lcs = getLcsLength(a, b);
+  return (2 * lcs) / (a.length + b.length);
+}
+
 function customSkinViewToDefinition(skin: CustomSkinView): PetSkinDefinition {
   return {
     id: skin.id,
@@ -1201,13 +1251,17 @@ window.addEventListener("DOMContentLoaded", () => {
   let voiceRecognition: SpeechRecognitionLike | null = null;
   let voiceRecognitionId = 0;
   let voiceRestartTimer: number | undefined;
+  let voiceResumeTimer: number | undefined;
   let voiceIntentionalStop = false;
+  let voicePausedForAiSpeech = false;
+  let voiceSelfSpeechSuppressedUntil = 0;
   let voiceSensitivity = clampVoiceSensitivity(Number(localStorage.getItem(VOICE_SENSITIVITY_STORAGE_KEY) ?? "6"));
   let voiceLanguage = localStorage.getItem(VOICE_LANGUAGE_STORAGE_KEY) || "zh-CN";
   let ttsPlaybackEnabled = false;
   let ttsPlaybackRequestId = 0;
   let ttsAssetCatalog: TtsAssetCatalog = { gptWeights: [], sovitsWeights: [], refAudios: [] };
   let ttsAssetCatalogRequestId = 0;
+  let recentAiSpeechTexts: Array<{ text: string; expiresAt: number }> = [];
   let activeSpeechAudio: HTMLAudioElement | null = null;
   let maskEditorParts = cloneBodyMaskParts(getBodyMasksForSkin(activeSkin));
   let selectedMaskPartId = maskEditorParts[0]?.id ?? "";
@@ -2450,7 +2504,7 @@ window.addEventListener("DOMContentLoaded", () => {
     voiceSensitivityInput.value = String(voiceSensitivity);
     voiceSensitivityValue.textContent = String(voiceSensitivity);
     const threshold = Math.round(getVoiceConfidenceThreshold(voiceSensitivity) * 100);
-    voiceRestartButton.disabled = !state.voiceEnabled;
+    voiceRestartButton.disabled = !state.voiceEnabled || voicePausedForAiSpeech;
 
     if (!getSpeechRecognitionConstructor()) {
       voiceEnabledInput.disabled = true;
@@ -2462,6 +2516,11 @@ window.addEventListener("DOMContentLoaded", () => {
 
     voiceEnabledInput.disabled = false;
     voiceTestButton.disabled = false;
+    if (state.voiceEnabled && voicePausedForAiSpeech) {
+      setVoiceStatus("AI 语音播放中，麦克风已临时暂停，避免把桌宠自己的声音当成指令。", "idle");
+      return;
+    }
+
     if (!state.voiceEnabled) {
       setVoiceStatus(`语音识别未开启。当前灵敏度 ${voiceSensitivity}，短句置信度阈值约 ${threshold}%；较完整文本会优先采用。`, "idle");
     }
@@ -2787,15 +2846,112 @@ window.addEventListener("DOMContentLoaded", () => {
       activeSpeechAudio.pause();
       activeSpeechAudio.src = "";
       activeSpeechAudio = null;
+      resumeVoiceRecognitionAfterAiSpeech(VOICE_SELF_SPEECH_COOLDOWN_MS);
     }
+  }
+
+  function pruneRecentAiSpeechTexts(now = Date.now()): void {
+    recentAiSpeechTexts = recentAiSpeechTexts.filter((item) => item.expiresAt > now);
+  }
+
+  function rememberAiSpeechText(text: string): void {
+    const normalized = normalizeVoiceGuardText(text);
+    if (!normalized) {
+      return;
+    }
+
+    const now = Date.now();
+    pruneRecentAiSpeechTexts(now);
+    recentAiSpeechTexts.unshift({
+      text,
+      expiresAt: now + VOICE_RECENT_AI_SPEECH_TTL_MS,
+    });
+    recentAiSpeechTexts = recentAiSpeechTexts.slice(0, 5);
+  }
+
+  function extendVoiceSelfSpeechSuppression(durationMs: number): void {
+    voiceSelfSpeechSuppressedUntil = Math.max(voiceSelfSpeechSuppressedUntil, Date.now() + durationMs);
+  }
+
+  function isVoiceSelfSpeechSuppressed(): boolean {
+    return Date.now() < voiceSelfSpeechSuppressedUntil;
+  }
+
+  function shouldIgnoreVoiceTranscriptAsSelfSpeech(transcript: string): boolean {
+    if (isVoiceSelfSpeechSuppressed()) {
+      return true;
+    }
+
+    const normalizedTranscript = normalizeVoiceGuardText(transcript);
+    if (normalizedTranscript.length < 4) {
+      return false;
+    }
+
+    const now = Date.now();
+    pruneRecentAiSpeechTexts(now);
+    return recentAiSpeechTexts.some((item) => getVoiceTextSimilarity(transcript, item.text) >= VOICE_SELF_SPEECH_SIMILARITY_THRESHOLD);
+  }
+
+  function pauseVoiceRecognitionForAiSpeech(text: string, estimatedDurationMs: number): void {
+    rememberAiSpeechText(text);
+    extendVoiceSelfSpeechSuppression(estimatedDurationMs + VOICE_SELF_SPEECH_COOLDOWN_MS);
+
+    if (!state.voiceEnabled) {
+      return;
+    }
+
+    voicePausedForAiSpeech = true;
+    voiceIntentionalStop = true;
+    voiceRecognitionId += 1;
+    clearTimer(voiceRestartTimer);
+    clearTimer(voiceResumeTimer);
+    voiceRestartTimer = undefined;
+    voiceResumeTimer = undefined;
+
+    try {
+      voiceRecognition?.abort();
+    } catch (error) {
+      console.warn("Failed to pause voice recognition for AI speech:", error);
+    }
+    voiceRecognition = null;
+    syncVoiceControls();
+  }
+
+  function resumeVoiceRecognitionAfterAiSpeech(delayMs = VOICE_SELF_SPEECH_COOLDOWN_MS): void {
+    extendVoiceSelfSpeechSuppression(delayMs);
+    clearTimer(voiceResumeTimer);
+    voiceResumeTimer = undefined;
+
+    if (!voicePausedForAiSpeech || !state.voiceEnabled) {
+      return;
+    }
+
+    voiceResumeTimer = window.setTimeout(() => {
+      voiceResumeTimer = undefined;
+      if (!voicePausedForAiSpeech || !state.voiceEnabled || activeSpeechAudio) {
+        return;
+      }
+
+      const remainingSuppression = voiceSelfSpeechSuppressedUntil - Date.now();
+      if (remainingSuppression > 0) {
+        resumeVoiceRecognitionAfterAiSpeech(Math.ceil(remainingSuppression));
+        return;
+      }
+
+      voicePausedForAiSpeech = false;
+      void startVoiceRecognition({ persist: false, announce: false });
+    }, Math.max(0, delayMs));
   }
 
   function stopVoiceRecognition(options: { persist?: boolean; announce?: boolean } = {}): void {
     state.voiceEnabled = false;
+    voicePausedForAiSpeech = false;
     voiceIntentionalStop = true;
     voiceRecognitionId += 1;
     clearTimer(voiceRestartTimer);
+    clearTimer(voiceResumeTimer);
     voiceRestartTimer = undefined;
+    voiceResumeTimer = undefined;
 
     if (options.persist ?? true) {
       localStorage.setItem(VOICE_ENABLED_STORAGE_KEY, "0");
@@ -2827,6 +2983,11 @@ window.addEventListener("DOMContentLoaded", () => {
         continue;
       }
 
+      if (shouldIgnoreVoiceTranscriptAsSelfSpeech(transcript)) {
+        setVoiceStatus("已忽略桌宠自身语音回声。", "hint");
+        continue;
+      }
+
       if (!shouldAcceptVoiceTranscript(transcript, confidence, voiceSensitivity)) {
         setVoiceStatus(
           `听到了“${transcript}”，但它太短且置信度偏低，已忽略。可以调高灵敏度或说完整一点。`,
@@ -2853,16 +3014,25 @@ window.addEventListener("DOMContentLoaded", () => {
     recognition.maxAlternatives = 1;
     recognition.lang = voiceLanguage;
     recognition.onaudiostart = () => {
+      if (voicePausedForAiSpeech || isVoiceSelfSpeechSuppressed()) {
+        return;
+      }
       setVoiceStatus("麦克风已连接，正在听语音命令。", "warm");
     };
     recognition.onspeechstart = () => {
+      if (voicePausedForAiSpeech || isVoiceSelfSpeechSuppressed()) {
+        return;
+      }
       setVoiceStatus("听到声音了，正在识别...", "warm");
     };
     recognition.onspeechend = () => {
+      if (voicePausedForAiSpeech || isVoiceSelfSpeechSuppressed()) {
+        return;
+      }
       setVoiceStatus("一句话结束了，等待识别结果...", "idle");
     };
     recognition.onresult = (event) => {
-      if (recognitionId === voiceRecognitionId) {
+      if (recognitionId === voiceRecognitionId && !voicePausedForAiSpeech) {
         handleVoiceResult(event);
       }
     };
@@ -2926,6 +3096,14 @@ window.addEventListener("DOMContentLoaded", () => {
       localStorage.setItem(VOICE_ENABLED_STORAGE_KEY, "1");
     }
 
+    if (activeSpeechAudio || voicePausedForAiSpeech || isVoiceSelfSpeechSuppressed()) {
+      voicePausedForAiSpeech = true;
+      syncVoiceControls();
+      const delayMs = Math.max(VOICE_SELF_SPEECH_COOLDOWN_MS, voiceSelfSpeechSuppressedUntil - Date.now());
+      resumeVoiceRecognitionAfterAiSpeech(delayMs);
+      return;
+    }
+
     try {
       await requestMicrophonePermission();
       const previousRecognition = voiceRecognition;
@@ -2950,6 +3128,14 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function restartVoiceRecognition(): void {
     if (!state.voiceEnabled) {
+      return;
+    }
+
+    if (activeSpeechAudio || voicePausedForAiSpeech || isVoiceSelfSpeechSuppressed()) {
+      voicePausedForAiSpeech = true;
+      syncVoiceControls();
+      const delayMs = Math.max(VOICE_SELF_SPEECH_COOLDOWN_MS, voiceSelfSpeechSuppressedUntil - Date.now());
+      resumeVoiceRecognitionAfterAiSpeech(delayMs);
       return;
     }
 
@@ -3734,6 +3920,7 @@ window.addEventListener("DOMContentLoaded", () => {
       activeSpeechAudio?.pause();
       const audio = new Audio(response.audioDataUrl);
       activeSpeechAudio = audio;
+      const estimatedDurationMs = Math.max(1800, Math.min(5200, speechText.length * 160));
 
       audio.addEventListener("play", () => {
         if (requestId !== ttsPlaybackRequestId) {
@@ -3757,7 +3944,8 @@ window.addEventListener("DOMContentLoaded", () => {
 
         const durationMs = Number.isFinite(audio.duration) && audio.duration > 0
           ? Math.ceil(audio.duration * 1000)
-          : Math.max(1800, Math.min(5200, speechText.length * 160));
+          : estimatedDurationMs;
+        extendVoiceSelfSpeechSuppression(durationMs + VOICE_SELF_SPEECH_COOLDOWN_MS);
         state.bubbleTimeout = window.setTimeout(() => {
           bubble.dataset.show = "false";
         }, durationMs + 700);
@@ -3774,17 +3962,27 @@ window.addEventListener("DOMContentLoaded", () => {
         }
 
         activeSpeechAudio = null;
+        resumeVoiceRecognitionAfterAiSpeech(VOICE_SELF_SPEECH_COOLDOWN_MS);
       });
 
       audio.addEventListener("error", () => {
         if (options.updateStatus ?? false) {
           setTtsStatus("音频已合成，但 WebView 播放失败。", "alert");
         }
+        if (requestId === ttsPlaybackRequestId) {
+          activeSpeechAudio = null;
+          resumeVoiceRecognitionAfterAiSpeech(600);
+        }
       });
 
+      pauseVoiceRecognitionForAiSpeech(speechText, estimatedDurationMs);
       await audio.play();
       return true;
     } catch (error) {
+      if (requestId === ttsPlaybackRequestId) {
+        activeSpeechAudio = null;
+        resumeVoiceRecognitionAfterAiSpeech(600);
+      }
       if (options.updateStatus ?? false) {
         setTtsStatus(`AI 发声失败：${String(error)}`, "alert");
       } else {

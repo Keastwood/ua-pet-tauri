@@ -58,6 +58,8 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 右键桌宠打开设置页，在“语音”标签里配置 AI 发声。默认优先使用“本地 GPT-SoVITS（自动启动）”：程序会保存 GPT-SoVITS 根目录、运行时 Python、yua GPT/SoVITS 权重、参考音频和端口，并在需要发声时自动启动本地 `api_v2.py`。设置页支持系统文件选择器，也会扫描本地 GPT-SoVITS 目录，以下拉框切换 GPT 权重、SoVITS 权重和参考音频。也可以改用已手动启动的 GPT-SoVITS api_v2、OpenAI 兼容 `/audio/speech` 或自定义 JSON 音频端点。
 
+语音监听和 AI 发声同时开启时，程序会在桌宠播放语音期间临时暂停麦克风监听，并在播放结束后经过短冷却再恢复，同时过滤与最近播放文本高度相似的识别结果，避免音响回声被当作用户指令造成循环。
+
 ## 主要目录
 
 - `src/main.ts`：桌宠状态、交互控件、点击部位映射、历史页、悬浮输入框和前端 LLM 调用。
