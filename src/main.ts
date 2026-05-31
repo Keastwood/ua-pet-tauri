@@ -123,7 +123,7 @@ interface TtsSynthesisResponse {
 }
 
 interface AsrConfigView {
-  provider: "browser" | "openAiCompatible";
+  provider: "browser" | "windowsNative" | "openAiCompatible";
   endpoint: string;
   hasApiKey: boolean;
   maskedApiKey?: string;
@@ -136,6 +136,12 @@ interface AsrConfigView {
 
 interface AsrTranscriptionResponse {
   text: string;
+  provider: string;
+}
+
+interface NativeSpeechRecognitionEvent {
+  transcript: string;
+  confidence: number;
   provider: string;
 }
 
@@ -1320,7 +1326,7 @@ window.addEventListener("DOMContentLoaded", () => {
   let voiceSensitivity = clampVoiceSensitivity(Number(localStorage.getItem(VOICE_SENSITIVITY_STORAGE_KEY) ?? "6"));
   let voiceLanguage = localStorage.getItem(VOICE_LANGUAGE_STORAGE_KEY) || "zh-CN";
   let asrConfig: AsrConfigView = {
-    provider: "browser",
+    provider: "windowsNative",
     endpoint: "https://api.openai.com/v1",
     hasApiKey: false,
     model: "whisper-1",
@@ -2579,6 +2585,7 @@ window.addEventListener("DOMContentLoaded", () => {
   function syncVoiceControls(): void {
     const selectedAsrProvider = asrProviderSelect.value || asrConfig.provider;
     const usesExternalAsr = selectedAsrProvider === "openAiCompatible";
+    const usesWindowsNativeAsr = selectedAsrProvider === "windowsNative";
     voiceEnabledInput.checked = state.voiceEnabled;
     asrExternalFieldEls.forEach((element) => {
       element.hidden = !usesExternalAsr;
@@ -2590,7 +2597,7 @@ window.addEventListener("DOMContentLoaded", () => {
     const threshold = Math.round(getVoiceConfidenceThreshold(voiceSensitivity) * 100);
     voiceRestartButton.disabled = !state.voiceEnabled || voicePausedForAiSpeech;
 
-    if (!usesExternalAsr && !getSpeechRecognitionConstructor()) {
+    if (!usesExternalAsr && !usesWindowsNativeAsr && !getSpeechRecognitionConstructor()) {
       voiceEnabledInput.disabled = true;
       voiceTestButton.disabled = true;
       voiceRestartButton.disabled = true;
@@ -2609,7 +2616,9 @@ window.addEventListener("DOMContentLoaded", () => {
       setVoiceStatus(
         usesExternalAsr
           ? `高精度 ASR 未开启。当前灵敏度 ${voiceSensitivity}，会按静音自动切句并发送到识别服务。`
-          : `语音识别未开启。当前灵敏度 ${voiceSensitivity}，短句置信度阈值约 ${threshold}%；较完整文本会优先采用。`,
+          : usesWindowsNativeAsr
+            ? `Windows 原生识别未开启。当前灵敏度 ${voiceSensitivity}，会使用系统听写链路和系统筛选设置。`
+            : `WebView 识别未开启。当前灵敏度 ${voiceSensitivity}，短句置信度阈值约 ${threshold}%；较完整文本会优先采用。`,
         "idle",
       );
     }
@@ -2673,7 +2682,9 @@ window.addEventListener("DOMContentLoaded", () => {
         setVoiceStatus(
           config.provider === "openAiCompatible"
             ? "高精度 ASR 配置已保存，之后会用外部识别服务转写麦克风。"
-            : "识别配置已保存，当前使用系统 WebView 识别。",
+            : config.provider === "windowsNative"
+              ? "识别配置已保存，当前使用 Windows 原生识别。"
+              : "识别配置已保存，当前使用 WebView 识别。",
           "warm",
         );
       }
@@ -3090,6 +3101,9 @@ window.addEventListener("DOMContentLoaded", () => {
     }
     voiceRecognition = null;
     closeExternalVoiceAudio();
+    void invoke("stop_native_speech_recognition").catch((error) => {
+      console.warn("Failed to pause native speech recognition:", error);
+    });
     syncVoiceControls();
   }
 
@@ -3192,17 +3206,7 @@ window.addEventListener("DOMContentLoaded", () => {
       if (!transcript) {
         return;
       }
-      if (shouldIgnoreVoiceTranscriptAsSelfSpeech(transcript)) {
-        setVoiceStatus("已忽略桌宠自身语音回声。", "hint");
-        return;
-      }
-      if (!shouldAcceptVoiceTranscript(transcript, 1, voiceSensitivity)) {
-        setVoiceStatus(`识别到“${transcript}”，但文本太短，已忽略。`, "hint");
-        return;
-      }
-
-      setVoiceStatus(`高精度识别到：${transcript}`, "warm");
-      void runLlmInteraction("voice", "语音命令", undefined, transcript);
+      handleFinalVoiceTranscript(transcript, 1, "高精度 ASR ");
     } catch (error) {
       console.error(error);
       if (recognitionId === voiceRecognitionId) {
@@ -3316,6 +3320,7 @@ window.addEventListener("DOMContentLoaded", () => {
         throw new Error("当前 WebView 不支持 MediaRecorder，无法使用高精度 ASR。");
       }
       closeExternalVoiceAudio();
+      await invoke("stop_native_speech_recognition");
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -3355,6 +3360,52 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  async function startNativeVoiceRecognition(options: { persist?: boolean; announce?: boolean } = {}): Promise<void> {
+    state.voiceEnabled = true;
+    voiceIntentionalStop = false;
+    clearTimer(voiceRestartTimer);
+    voiceRestartTimer = undefined;
+
+    if (options.persist ?? true) {
+      localStorage.setItem(VOICE_ENABLED_STORAGE_KEY, "1");
+    }
+
+    if (activeSpeechAudio || voicePausedForAiSpeech || isVoiceSelfSpeechSuppressed()) {
+      voicePausedForAiSpeech = true;
+      syncVoiceControls();
+      const delayMs = Math.max(VOICE_SELF_SPEECH_COOLDOWN_MS, voiceSelfSpeechSuppressedUntil - Date.now());
+      resumeVoiceRecognitionAfterAiSpeech(delayMs);
+      return;
+    }
+
+    try {
+      const previousRecognition = voiceRecognition;
+      const recognitionId = ++voiceRecognitionId;
+      previousRecognition?.abort();
+      voiceRecognition = null;
+      closeExternalVoiceAudio();
+      await invoke("stop_native_speech_recognition");
+      if (recognitionId !== voiceRecognitionId) {
+        return;
+      }
+      await invoke("start_native_speech_recognition", {
+        language: voiceLanguage,
+      });
+      syncVoiceControls();
+      setVoiceStatus("Windows 原生识别已开启，会使用系统听写链路和系统不雅内容筛选设置。", "warm");
+      if (options.announce) {
+        setBubble("Windows 原生语音监听开启啦。", "hint", 1900);
+      }
+    } catch (error) {
+      console.error(error);
+      state.voiceEnabled = false;
+      localStorage.setItem(VOICE_ENABLED_STORAGE_KEY, "0");
+      syncVoiceControls();
+      setVoiceStatus(`Windows 原生识别启动失败：${String(error)}`, "alert");
+      setBubble("Windows 原生识别没启动成功。", "alert", 2200);
+    }
+  }
+
   function stopVoiceRecognition(options: { persist?: boolean; announce?: boolean } = {}): void {
     state.voiceEnabled = false;
     voicePausedForAiSpeech = false;
@@ -3376,11 +3427,39 @@ window.addEventListener("DOMContentLoaded", () => {
     }
     voiceRecognition = null;
     closeExternalVoiceAudio();
+    void invoke("stop_native_speech_recognition").catch((error) => {
+      console.warn("Failed to stop native speech recognition:", error);
+    });
 
     syncVoiceControls();
     if (options.announce) {
       setBubble("语音监听已关闭。", "hint", 1400);
     }
+  }
+
+  function handleFinalVoiceTranscript(transcript: string, confidence: number, sourceLabel: string): void {
+    const cleanTranscript = transcript.trim();
+    if (!cleanTranscript) {
+      return;
+    }
+
+    if (shouldIgnoreVoiceTranscriptAsSelfSpeech(cleanTranscript)) {
+      setVoiceStatus("已忽略桌宠自身语音回声。", "hint");
+      return;
+    }
+
+    if (!shouldAcceptVoiceTranscript(cleanTranscript, confidence, voiceSensitivity)) {
+      setVoiceStatus(
+        `听到了“${cleanTranscript}”，但它太短且置信度偏低，已忽略。可以调高灵敏度或说完整一点。`,
+        "hint",
+      );
+      setBubble("我听见了一点，但不太确定。", "hint", 1600);
+      return;
+    }
+
+    const confidenceText = Number.isFinite(confidence) ? `（置信度 ${Math.round(confidence * 100)}%）` : "";
+    setVoiceStatus(`${sourceLabel}识别到：${cleanTranscript}${confidenceText}`, "warm");
+    void runLlmInteraction("voice", "语音命令", undefined, cleanTranscript);
   }
 
   function handleVoiceResult(event: SpeechRecognitionEventLike): void {
@@ -3405,26 +3484,7 @@ window.addEventListener("DOMContentLoaded", () => {
       }
       const transcript = alternative.transcript.trim();
       const confidence = Number.isFinite(alternative.confidence) ? alternative.confidence : 1;
-      if (!transcript) {
-        continue;
-      }
-
-      if (shouldIgnoreVoiceTranscriptAsSelfSpeech(transcript)) {
-        setVoiceStatus("已忽略桌宠自身语音回声。", "hint");
-        continue;
-      }
-
-      if (!shouldAcceptVoiceTranscript(transcript, confidence, voiceSensitivity)) {
-        setVoiceStatus(
-          `听到了“${transcript}”，但它太短且置信度偏低，已忽略。可以调高灵敏度或说完整一点。`,
-          "hint",
-        );
-        setBubble("我听见了一点，但不太确定。", "hint", 1600);
-        continue;
-      }
-
-      setVoiceStatus(`识别到：${transcript}（置信度 ${Math.round(confidence * 100)}%）`, "warm");
-      void runLlmInteraction("voice", "语音命令", undefined, transcript);
+      handleFinalVoiceTranscript(transcript, confidence, "WebView ");
     }
   }
 
@@ -3507,6 +3567,11 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   async function startVoiceRecognition(options: { persist?: boolean; announce?: boolean } = {}): Promise<void> {
+    if (asrConfig.provider === "windowsNative") {
+      await startNativeVoiceRecognition(options);
+      return;
+    }
+
     if (asrConfig.provider === "openAiCompatible") {
       await startExternalVoiceRecognition(options);
       return;
@@ -3537,6 +3602,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     try {
       closeExternalVoiceAudio();
+      await invoke("stop_native_speech_recognition");
       await requestMicrophonePermission();
       const previousRecognition = voiceRecognition;
       const recognitionId = ++voiceRecognitionId;
@@ -3580,6 +3646,9 @@ window.addEventListener("DOMContentLoaded", () => {
     }
     voiceRecognition = null;
     closeExternalVoiceAudio();
+    void invoke("stop_native_speech_recognition").catch((error) => {
+      console.warn("Failed to restart native speech recognition:", error);
+    });
     window.setTimeout(() => {
       void startVoiceRecognition({ persist: false, announce: false });
     }, 180);
@@ -5217,7 +5286,9 @@ window.addEventListener("DOMContentLoaded", () => {
     setVoiceStatus(
       asrProviderSelect.value === "openAiCompatible"
         ? "已切到高精度 ASR，请保存配置后重启监听。"
-        : "已切到系统 WebView 识别，请保存配置后重启监听。",
+        : asrProviderSelect.value === "windowsNative"
+          ? "已切到 Windows 原生识别，请保存配置后重启监听。"
+          : "已切到 WebView 识别，请保存配置后重启监听。",
       "idle",
     );
   });
@@ -5729,6 +5800,17 @@ window.addEventListener("DOMContentLoaded", () => {
       applyAsrConfig(event.payload);
       if (state.voiceEnabled) {
         restartVoiceRecognition();
+      }
+    });
+    void listen<NativeSpeechRecognitionEvent>("native-speech-result", (event) => {
+      if (asrConfig.provider !== "windowsNative" || voicePausedForAiSpeech) {
+        return;
+      }
+      handleFinalVoiceTranscript(event.payload.transcript, event.payload.confidence, "Windows ");
+    });
+    void listen<string>("native-speech-status", (event) => {
+      if (asrConfig.provider === "windowsNative") {
+        setVoiceStatus(event.payload, "alert");
       }
     });
   }

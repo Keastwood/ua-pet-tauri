@@ -20,6 +20,18 @@ use tauri::{
 };
 #[cfg(not(mobile))]
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+#[cfg(windows)]
+use windows::{
+    core::{Ref, HSTRING},
+    Foundation::TypedEventHandler,
+    Globalization::Language,
+    Media::SpeechRecognition::{
+        SpeechContinuousRecognitionCompletedEventArgs, SpeechContinuousRecognitionMode,
+        SpeechContinuousRecognitionResultGeneratedEventArgs, SpeechContinuousRecognitionSession,
+        SpeechRecognitionConfidence, SpeechRecognitionResultStatus, SpeechRecognitionScenario,
+        SpeechRecognitionTopicConstraint, SpeechRecognizer,
+    },
+};
 
 const DEFAULT_LLM_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_LLM_TIMEOUT_SECS: u64 = 45;
@@ -36,6 +48,7 @@ const TTS_PROVIDER_MANAGED_GPT_SOVITS: &str = "managedGptSovits";
 const TTS_PROVIDER_OPENAI_COMPATIBLE: &str = "openAiCompatible";
 const TTS_PROVIDER_CUSTOM_JSON: &str = "customJson";
 const ASR_PROVIDER_BROWSER: &str = "browser";
+const ASR_PROVIDER_WINDOWS_NATIVE: &str = "windowsNative";
 const ASR_PROVIDER_OPENAI_COMPATIBLE: &str = "openAiCompatible";
 const DEFAULT_ASR_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_ASR_MODEL: &str = "whisper-1";
@@ -199,6 +212,31 @@ struct ManagedGptSovitsState {
     child: Mutex<Option<Child>>,
 }
 
+#[cfg(windows)]
+#[derive(Default)]
+struct NativeSpeechState {
+    session: Mutex<Option<NativeSpeechSession>>,
+}
+
+#[cfg(windows)]
+struct NativeSpeechSession {
+    recognizer: SpeechRecognizer,
+    session: SpeechContinuousRecognitionSession,
+    result_token: i64,
+    completed_token: i64,
+}
+
+#[cfg(windows)]
+impl Drop for NativeSpeechState {
+    fn drop(&mut self) {
+        if let Ok(slot) = self.session.get_mut() {
+            if let Some(session) = slot.take() {
+                stop_native_speech_session(session);
+            }
+        }
+    }
+}
+
 impl Drop for ManagedGptSovitsState {
     fn drop(&mut self) {
         if let Ok(slot) = self.child.get_mut() {
@@ -297,6 +335,14 @@ struct AsrTranscriptionRequest {
 #[serde(rename_all = "camelCase")]
 struct AsrTranscriptionResponse {
     text: String,
+    provider: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeSpeechRecognitionEvent {
+    transcript: String,
+    confidence: f64,
     provider: String,
 }
 
@@ -1318,11 +1364,17 @@ fn normalize_tts_provider(provider: Option<String>) -> String {
 fn normalize_asr_provider(provider: Option<String>) -> String {
     match provider
         .as_deref()
-        .unwrap_or(ASR_PROVIDER_BROWSER)
+        .unwrap_or(if cfg!(windows) {
+            ASR_PROVIDER_WINDOWS_NATIVE
+        } else {
+            ASR_PROVIDER_BROWSER
+        })
         .trim()
         .to_ascii_lowercase()
         .as_str()
     {
+        "windows" | "native" | "windowsnative" | "windows-native" | "windows_native" | "system"
+        | "systemdictation" | "system-dictation" => ASR_PROVIDER_WINDOWS_NATIVE.to_string(),
         "openai" | "openaicompatible" | "openai-compatible" | "open_ai_compatible" | "whisper" => {
             ASR_PROVIDER_OPENAI_COMPATIBLE.to_string()
         }
@@ -1510,6 +1562,62 @@ fn asr_endpoint_url(endpoint: &str) -> String {
     } else {
         format!("{trimmed}/v1/audio/transcriptions")
     }
+}
+
+#[cfg(windows)]
+fn windows_error(error: windows::core::Error) -> String {
+    error.message().to_string()
+}
+
+#[cfg(windows)]
+fn speech_status_label(status: SpeechRecognitionResultStatus) -> &'static str {
+    if status == SpeechRecognitionResultStatus::Success {
+        "success"
+    } else if status == SpeechRecognitionResultStatus::TopicLanguageNotSupported {
+        "topic-language-not-supported"
+    } else if status == SpeechRecognitionResultStatus::GrammarLanguageMismatch {
+        "grammar-language-mismatch"
+    } else if status == SpeechRecognitionResultStatus::GrammarCompilationFailure {
+        "grammar-compilation-failure"
+    } else if status == SpeechRecognitionResultStatus::AudioQualityFailure {
+        "audio-quality-failure"
+    } else if status == SpeechRecognitionResultStatus::UserCanceled {
+        "user-canceled"
+    } else if status == SpeechRecognitionResultStatus::TimeoutExceeded {
+        "timeout-exceeded"
+    } else if status == SpeechRecognitionResultStatus::PauseLimitExceeded {
+        "pause-limit-exceeded"
+    } else if status == SpeechRecognitionResultStatus::NetworkFailure {
+        "network-failure"
+    } else if status == SpeechRecognitionResultStatus::MicrophoneUnavailable {
+        "microphone-unavailable"
+    } else {
+        "unknown"
+    }
+}
+
+#[cfg(windows)]
+fn speech_confidence_value(confidence: SpeechRecognitionConfidence) -> f64 {
+    if confidence == SpeechRecognitionConfidence::High {
+        0.92
+    } else if confidence == SpeechRecognitionConfidence::Medium {
+        0.74
+    } else if confidence == SpeechRecognitionConfidence::Low {
+        0.46
+    } else {
+        0.0
+    }
+}
+
+#[cfg(windows)]
+fn stop_native_speech_session(session: NativeSpeechSession) {
+    let _ = session.session.RemoveResultGenerated(session.result_token);
+    let _ = session.session.RemoveCompleted(session.completed_token);
+    let _ = session
+        .session
+        .CancelAsync()
+        .and_then(|action| action.get());
+    let _ = session.recognizer.Close();
 }
 
 fn managed_gpt_sovits_config_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -2151,6 +2259,166 @@ fn save_asr_config(app: AppHandle, request: SaveAsrConfigRequest) -> Result<AsrC
     save_stored_asr_config(&app, &stored)?;
     let _ = app.emit("asr-config-updated", view.clone());
     Ok(view)
+}
+
+#[tauri::command]
+#[cfg(windows)]
+fn start_native_speech_recognition(
+    app: AppHandle,
+    native_speech: State<'_, NativeSpeechState>,
+    language: String,
+) -> Result<(), String> {
+    if let Some(session) = native_speech
+        .session
+        .lock()
+        .map_err(|_| "Windows 原生识别状态锁已损坏。".to_string())?
+        .take()
+    {
+        stop_native_speech_session(session);
+    }
+
+    let language_tag = clean_optional(Some(language)).unwrap_or_else(|| "zh-CN".to_string());
+    let language =
+        Language::CreateLanguage(&HSTRING::from(language_tag.as_str())).map_err(windows_error)?;
+    let recognizer = SpeechRecognizer::Create(&language).map_err(windows_error)?;
+    let constraints = recognizer.Constraints().map_err(windows_error)?;
+    let dictation = SpeechRecognitionTopicConstraint::Create(
+        SpeechRecognitionScenario::Dictation,
+        &HSTRING::from("dictation"),
+    )
+    .map_err(windows_error)?;
+    constraints.Append(&dictation).map_err(windows_error)?;
+
+    let compile_result = recognizer
+        .CompileConstraintsAsync()
+        .map_err(windows_error)?
+        .get()
+        .map_err(windows_error)?;
+    let compile_status = compile_result.Status().map_err(windows_error)?;
+    if compile_status != SpeechRecognitionResultStatus::Success {
+        let _ = recognizer.Close();
+        return Err(format!(
+            "Windows 原生识别约束编译失败：{}",
+            speech_status_label(compile_status)
+        ));
+    }
+
+    let session = recognizer
+        .ContinuousRecognitionSession()
+        .map_err(windows_error)?;
+    let result_app = app.clone();
+    let result_handler: TypedEventHandler<
+        SpeechContinuousRecognitionSession,
+        SpeechContinuousRecognitionResultGeneratedEventArgs,
+    > = TypedEventHandler::new(
+        move |_sender: Ref<SpeechContinuousRecognitionSession>,
+              args: Ref<SpeechContinuousRecognitionResultGeneratedEventArgs>| {
+            let args = args.ok()?;
+            let result = args.Result()?;
+            if result.Status()? != SpeechRecognitionResultStatus::Success {
+                return Ok(());
+            }
+
+            let transcript = result.Text()?.to_string_lossy().trim().to_string();
+            if transcript.is_empty() {
+                return Ok(());
+            }
+
+            let confidence = result
+                .RawConfidence()
+                .ok()
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .unwrap_or_else(|| {
+                    speech_confidence_value(
+                        result
+                            .Confidence()
+                            .unwrap_or(SpeechRecognitionConfidence::Medium),
+                    )
+                });
+            let _ = result_app.emit(
+                "native-speech-result",
+                NativeSpeechRecognitionEvent {
+                    transcript,
+                    confidence,
+                    provider: ASR_PROVIDER_WINDOWS_NATIVE.to_string(),
+                },
+            );
+            Ok(())
+        },
+    );
+    let result_token = session
+        .ResultGenerated(&result_handler)
+        .map_err(windows_error)?;
+
+    let completed_app = app.clone();
+    let completed_handler: TypedEventHandler<
+        SpeechContinuousRecognitionSession,
+        SpeechContinuousRecognitionCompletedEventArgs,
+    > = TypedEventHandler::new(
+        move |_sender: Ref<SpeechContinuousRecognitionSession>,
+              args: Ref<SpeechContinuousRecognitionCompletedEventArgs>| {
+            let args = args.ok()?;
+            let status = args.Status()?;
+            if status != SpeechRecognitionResultStatus::Success
+                && status != SpeechRecognitionResultStatus::UserCanceled
+            {
+                let _ = completed_app.emit(
+                    "native-speech-status",
+                    format!("Windows 原生识别已停止：{}", speech_status_label(status)),
+                );
+            }
+            Ok(())
+        },
+    );
+    let completed_token = session
+        .Completed(&completed_handler)
+        .map_err(windows_error)?;
+
+    session
+        .StartWithModeAsync(SpeechContinuousRecognitionMode::Default)
+        .map_err(windows_error)?
+        .get()
+        .map_err(windows_error)?;
+
+    *native_speech
+        .session
+        .lock()
+        .map_err(|_| "Windows 原生识别状态锁已损坏。".to_string())? = Some(NativeSpeechSession {
+        recognizer,
+        session,
+        result_token,
+        completed_token,
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+#[cfg(not(windows))]
+fn start_native_speech_recognition(_app: AppHandle, _language: String) -> Result<(), String> {
+    Err("Windows 原生识别只支持 Windows。".to_string())
+}
+
+#[tauri::command]
+#[cfg(windows)]
+fn stop_native_speech_recognition(
+    native_speech: State<'_, NativeSpeechState>,
+) -> Result<(), String> {
+    if let Some(session) = native_speech
+        .session
+        .lock()
+        .map_err(|_| "Windows 原生识别状态锁已损坏。".to_string())?
+        .take()
+    {
+        stop_native_speech_session(session);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+#[cfg(not(windows))]
+fn stop_native_speech_recognition() -> Result<(), String> {
+    Ok(())
 }
 
 #[tauri::command]
@@ -3390,8 +3658,12 @@ pub fn run() {
             Ok(())
         });
 
+    let builder = builder.manage(ManagedGptSovitsState::default());
+
+    #[cfg(windows)]
+    let builder = builder.manage(NativeSpeechState::default());
+
     builder
-        .manage(ManagedGptSovitsState::default())
         .invoke_handler(tauri::generate_handler![
             clear_interaction_history,
             close_current_window,
@@ -3412,6 +3684,8 @@ pub fn run() {
             save_asr_config,
             save_tts_config,
             save_custom_skin,
+            start_native_speech_recognition,
+            stop_native_speech_recognition,
             synthesize_speech,
             transcribe_speech,
             move_pet_window,
