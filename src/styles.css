@@ -44,6 +44,10 @@ body {
   -webkit-user-select: none;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 button {
   font: inherit;
   -webkit-tap-highlight-color: transparent;

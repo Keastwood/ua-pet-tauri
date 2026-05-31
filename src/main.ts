@@ -122,6 +122,23 @@ interface TtsSynthesisResponse {
   provider: string;
 }
 
+interface AsrConfigView {
+  provider: "browser" | "openAiCompatible";
+  endpoint: string;
+  hasApiKey: boolean;
+  maskedApiKey?: string;
+  model: string;
+  language: string;
+  prompt: string;
+  timeoutSecs: number;
+  defaultPrompt: string;
+}
+
+interface AsrTranscriptionResponse {
+  text: string;
+  provider: string;
+}
+
 interface TtsAssetOption {
   label: string;
   path: string;
@@ -296,6 +313,7 @@ declare global {
   interface Window {
     SpeechRecognition?: SpeechRecognitionConstructor;
     webkitSpeechRecognition?: SpeechRecognitionConstructor;
+    webkitAudioContext?: typeof AudioContext;
   }
 }
 
@@ -329,6 +347,9 @@ const VOICE_LANGUAGE_STORAGE_KEY = "silver-pet.voice-language.v1";
 const VOICE_SELF_SPEECH_COOLDOWN_MS = 1400;
 const VOICE_RECENT_AI_SPEECH_TTL_MS = 12_000;
 const VOICE_SELF_SPEECH_SIMILARITY_THRESHOLD = 0.72;
+const VOICE_EXTERNAL_SILENCE_MS = 900;
+const VOICE_EXTERNAL_MIN_RECORDING_MS = 420;
+const VOICE_EXTERNAL_MAX_RECORDING_MS = 12_000;
 const AUTO_CHATTER_ENABLED_STORAGE_KEY = "silver-pet.auto-chatter-enabled.v1";
 const AUTO_CHATTER_INTERVAL_STORAGE_KEY = "silver-pet.auto-chatter-interval-secs.v1";
 const AUTO_CHATTER_TTS_STORAGE_KEY = "silver-pet.auto-chatter-tts.v1";
@@ -1155,6 +1176,16 @@ window.addEventListener("DOMContentLoaded", () => {
   const llmSystemPromptInput = must<HTMLTextAreaElement>("#llm-system-prompt-input");
   const llmClearKeyInput = must<HTMLInputElement>("#llm-clear-key-input");
   const voiceEnabledInput = must<HTMLInputElement>("#voice-enabled-input");
+  const asrProviderSelect = must<HTMLSelectElement>("#asr-provider-select");
+  const asrEndpointInput = must<HTMLInputElement>("#asr-endpoint-input");
+  const asrModelInput = must<HTMLInputElement>("#asr-model-input");
+  const asrLanguageInput = must<HTMLInputElement>("#asr-language-input");
+  const asrPromptInput = must<HTMLTextAreaElement>("#asr-prompt-input");
+  const asrTimeoutInput = must<HTMLInputElement>("#asr-timeout-input");
+  const asrApiKeyInput = must<HTMLInputElement>("#asr-api-key-input");
+  const asrClearKeyInput = must<HTMLInputElement>("#asr-clear-key-input");
+  const asrSaveButton = must<HTMLButtonElement>("#asr-save-btn");
+  const asrExternalFieldEls = Array.from(document.querySelectorAll<HTMLElement>("[data-asr-external-field]"));
   const voiceLanguageSelect = must<HTMLSelectElement>("#voice-language-select");
   const voiceSensitivityInput = must<HTMLInputElement>("#voice-sensitivity-input");
   const voiceSensitivityValue = must<HTMLElement>("#voice-sensitivity-value");
@@ -1271,6 +1302,15 @@ window.addEventListener("DOMContentLoaded", () => {
   let llmRequestId = 0;
   let activeSkin = findPetSkin(state.selectedSkinId);
   let voiceRecognition: SpeechRecognitionLike | null = null;
+  let voiceMediaStream: MediaStream | null = null;
+  let voiceAudioContext: AudioContext | null = null;
+  let voiceAnalyser: AnalyserNode | null = null;
+  let voiceLevelTimer: number | undefined;
+  let voiceExternalRecorder: MediaRecorder | null = null;
+  let voiceExternalChunks: Blob[] = [];
+  let voiceExternalRecordingStartedAt = 0;
+  let voiceExternalLastHeardAt = 0;
+  let voiceExternalProcessing = false;
   let voiceRecognitionId = 0;
   let voiceRestartTimer: number | undefined;
   let voiceResumeTimer: number | undefined;
@@ -1279,6 +1319,16 @@ window.addEventListener("DOMContentLoaded", () => {
   let voiceSelfSpeechSuppressedUntil = 0;
   let voiceSensitivity = clampVoiceSensitivity(Number(localStorage.getItem(VOICE_SENSITIVITY_STORAGE_KEY) ?? "6"));
   let voiceLanguage = localStorage.getItem(VOICE_LANGUAGE_STORAGE_KEY) || "zh-CN";
+  let asrConfig: AsrConfigView = {
+    provider: "browser",
+    endpoint: "https://api.openai.com/v1",
+    hasApiKey: false,
+    model: "whisper-1",
+    language: "zh",
+    prompt: "",
+    timeoutSecs: 45,
+    defaultPrompt: "",
+  };
   let ttsPlaybackEnabled = false;
   let ttsPlaybackRequestId = 0;
   let ttsAssetCatalog: TtsAssetCatalog = { gptWeights: [], sovitsWeights: [], refAudios: [] };
@@ -2527,14 +2577,20 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function syncVoiceControls(): void {
+    const selectedAsrProvider = asrProviderSelect.value || asrConfig.provider;
+    const usesExternalAsr = selectedAsrProvider === "openAiCompatible";
     voiceEnabledInput.checked = state.voiceEnabled;
+    asrExternalFieldEls.forEach((element) => {
+      element.hidden = !usesExternalAsr;
+    });
     voiceLanguageSelect.value = voiceLanguage;
+    voiceLanguageSelect.disabled = usesExternalAsr;
     voiceSensitivityInput.value = String(voiceSensitivity);
     voiceSensitivityValue.textContent = String(voiceSensitivity);
     const threshold = Math.round(getVoiceConfidenceThreshold(voiceSensitivity) * 100);
     voiceRestartButton.disabled = !state.voiceEnabled || voicePausedForAiSpeech;
 
-    if (!getSpeechRecognitionConstructor()) {
+    if (!usesExternalAsr && !getSpeechRecognitionConstructor()) {
       voiceEnabledInput.disabled = true;
       voiceTestButton.disabled = true;
       voiceRestartButton.disabled = true;
@@ -2550,13 +2606,85 @@ window.addEventListener("DOMContentLoaded", () => {
     }
 
     if (!state.voiceEnabled) {
-      setVoiceStatus(`语音识别未开启。当前灵敏度 ${voiceSensitivity}，短句置信度阈值约 ${threshold}%；较完整文本会优先采用。`, "idle");
+      setVoiceStatus(
+        usesExternalAsr
+          ? `高精度 ASR 未开启。当前灵敏度 ${voiceSensitivity}，会按静音自动切句并发送到识别服务。`
+          : `语音识别未开启。当前灵敏度 ${voiceSensitivity}，短句置信度阈值约 ${threshold}%；较完整文本会优先采用。`,
+        "idle",
+      );
     }
   }
 
   function setTtsStatus(text: string, tone: Tone | "idle" = "idle"): void {
     ttsStatus.textContent = text;
     ttsStatus.dataset.tone = tone;
+  }
+
+  function applyAsrConfig(config: AsrConfigView): void {
+    asrConfig = config;
+    asrProviderSelect.value = config.provider;
+    asrEndpointInput.value = config.endpoint || "https://api.openai.com/v1";
+    asrModelInput.value = config.model || "whisper-1";
+    asrLanguageInput.value = config.language || "zh";
+    asrPromptInput.value = config.prompt || config.defaultPrompt;
+    asrTimeoutInput.value = String(config.timeoutSecs || 45);
+    asrApiKeyInput.value = "";
+    asrApiKeyInput.placeholder = config.hasApiKey
+      ? `已保存：${config.maskedApiKey ?? "••••"}（留空则保留）`
+      : "可选，本地服务通常不需要";
+    asrClearKeyInput.checked = false;
+    syncVoiceControls();
+  }
+
+  function collectAsrConfigRequest(): Record<string, unknown> {
+    return {
+      provider: asrProviderSelect.value,
+      endpoint: asrEndpointInput.value.trim() || "https://api.openai.com/v1",
+      apiKey: asrApiKeyInput.value.trim() || null,
+      clearApiKey: asrClearKeyInput.checked,
+      model: asrModelInput.value.trim() || null,
+      language: asrLanguageInput.value.trim() || null,
+      prompt: asrPromptInput.value.trim() || null,
+      timeoutSecs: Math.min(300, Math.max(5, Math.round(Number(asrTimeoutInput.value) || 45))),
+    };
+  }
+
+  async function loadAsrSettings(): Promise<void> {
+    try {
+      const config = await invoke<AsrConfigView>("get_asr_config");
+      applyAsrConfig(config);
+    } catch (error) {
+      console.error(error);
+      setVoiceStatus(`读取识别配置失败：${String(error)}`, "alert");
+    }
+  }
+
+  async function saveAsrSettings(announce = true): Promise<AsrConfigView | null> {
+    asrSaveButton.disabled = true;
+    try {
+      const config = await invoke<AsrConfigView>("save_asr_config", {
+        request: collectAsrConfigRequest(),
+      });
+      applyAsrConfig(config);
+      if (state.voiceEnabled) {
+        restartVoiceRecognition();
+      }
+      if (announce) {
+        setVoiceStatus(
+          config.provider === "openAiCompatible"
+            ? "高精度 ASR 配置已保存，之后会用外部识别服务转写麦克风。"
+            : "识别配置已保存，当前使用系统 WebView 识别。",
+          "warm",
+        );
+      }
+      return config;
+    } catch (error) {
+      console.error(error);
+      setVoiceStatus(`保存识别配置失败：${String(error)}`, "alert");
+      return null;
+    } finally {
+      asrSaveButton.disabled = false;
+    }
   }
 
   function setAutoChatterStatus(text: string, tone: Tone | "idle" = "idle"): void {
@@ -2961,6 +3089,7 @@ window.addEventListener("DOMContentLoaded", () => {
       console.warn("Failed to pause voice recognition for AI speech:", error);
     }
     voiceRecognition = null;
+    closeExternalVoiceAudio();
     syncVoiceControls();
   }
 
@@ -2990,6 +3119,242 @@ window.addEventListener("DOMContentLoaded", () => {
     }, Math.max(0, delayMs));
   }
 
+  function voiceExternalMimeType(): string {
+    if (typeof MediaRecorder === "undefined") {
+      return "";
+    }
+    const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
+    return candidates.find((type) => MediaRecorder.isTypeSupported(type)) ?? "";
+  }
+
+  function voiceEnergyThreshold(): number {
+    return Math.max(0.012, 0.052 - clampVoiceSensitivity(voiceSensitivity) * 0.0038);
+  }
+
+  function closeExternalVoiceAudio(): void {
+    clearTimer(voiceLevelTimer);
+    voiceLevelTimer = undefined;
+
+    if (voiceExternalRecorder && voiceExternalRecorder.state !== "inactive") {
+      try {
+        voiceExternalRecorder.stop();
+      } catch (error) {
+        console.warn("Failed to stop external ASR recorder:", error);
+      }
+    }
+    voiceExternalRecorder = null;
+    voiceExternalChunks = [];
+    voiceExternalRecordingStartedAt = 0;
+    voiceExternalLastHeardAt = 0;
+
+    try {
+      voiceAudioContext?.close();
+    } catch (error) {
+      console.warn("Failed to close voice audio context:", error);
+    }
+    voiceAudioContext = null;
+    voiceAnalyser = null;
+
+    for (const track of voiceMediaStream?.getTracks() ?? []) {
+      track.stop();
+    }
+    voiceMediaStream = null;
+  }
+
+  function blobToDataUrl(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ""));
+      reader.onerror = () => reject(reader.error ?? new Error("读取音频片段失败"));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function submitExternalVoiceBlob(blob: Blob, recognitionId: number): Promise<void> {
+    if (recognitionId !== voiceRecognitionId || voiceExternalProcessing || blob.size < 512) {
+      return;
+    }
+
+    voiceExternalProcessing = true;
+    try {
+      const audioDataUrl = await blobToDataUrl(blob);
+      const response = await invoke<AsrTranscriptionResponse>("transcribe_speech", {
+        request: {
+          audioDataUrl,
+          mimeType: blob.type || voiceExternalMimeType() || "audio/webm",
+        },
+      });
+      if (recognitionId !== voiceRecognitionId || voicePausedForAiSpeech) {
+        return;
+      }
+
+      const transcript = response.text.trim();
+      if (!transcript) {
+        return;
+      }
+      if (shouldIgnoreVoiceTranscriptAsSelfSpeech(transcript)) {
+        setVoiceStatus("已忽略桌宠自身语音回声。", "hint");
+        return;
+      }
+      if (!shouldAcceptVoiceTranscript(transcript, 1, voiceSensitivity)) {
+        setVoiceStatus(`识别到“${transcript}”，但文本太短，已忽略。`, "hint");
+        return;
+      }
+
+      setVoiceStatus(`高精度识别到：${transcript}`, "warm");
+      void runLlmInteraction("voice", "语音命令", undefined, transcript);
+    } catch (error) {
+      console.error(error);
+      if (recognitionId === voiceRecognitionId) {
+        setVoiceStatus(`高精度识别失败：${String(error)}`, "alert");
+      }
+    } finally {
+      voiceExternalProcessing = false;
+    }
+  }
+
+  function stopExternalRecordingSegment(recognitionId: number): void {
+    const recorder = voiceExternalRecorder;
+    if (!recorder || recorder.state === "inactive") {
+      return;
+    }
+
+    recorder.onstop = () => {
+      const blob = new Blob(voiceExternalChunks, { type: recorder.mimeType || "audio/webm" });
+      voiceExternalChunks = [];
+      voiceExternalRecorder = null;
+      void submitExternalVoiceBlob(blob, recognitionId);
+    };
+    recorder.stop();
+    setVoiceStatus("一句话结束了，正在交给高精度 ASR...", "idle");
+  }
+
+  function startExternalRecordingSegment(): void {
+    if (!voiceMediaStream || voiceExternalRecorder || voiceExternalProcessing) {
+      return;
+    }
+
+    voiceExternalChunks = [];
+    const mimeType = voiceExternalMimeType();
+    const recorder = new MediaRecorder(voiceMediaStream, mimeType ? { mimeType } : undefined);
+    voiceExternalRecorder = recorder;
+    voiceExternalRecordingStartedAt = Date.now();
+    voiceExternalLastHeardAt = voiceExternalRecordingStartedAt;
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        voiceExternalChunks.push(event.data);
+      }
+    };
+    recorder.onerror = (event) => {
+      console.warn("External ASR recorder error:", event);
+      setVoiceStatus("高精度识别录音出错，正在等待下一句。", "alert");
+    };
+    recorder.start(250);
+    setVoiceStatus("听到声音了，正在录制给高精度 ASR...", "warm");
+  }
+
+  function pollExternalVoiceLevel(recognitionId: number): void {
+    if (recognitionId !== voiceRecognitionId || !state.voiceEnabled || voicePausedForAiSpeech || !voiceAnalyser) {
+      return;
+    }
+
+    if (activeSpeechAudio || isVoiceSelfSpeechSuppressed()) {
+      return;
+    }
+
+    const samples = new Uint8Array(voiceAnalyser.fftSize);
+    voiceAnalyser.getByteTimeDomainData(samples);
+    let sum = 0;
+    for (const sample of samples) {
+      const centered = (sample - 128) / 128;
+      sum += centered * centered;
+    }
+    const rms = Math.sqrt(sum / samples.length);
+    const now = Date.now();
+    const isSpeaking = rms >= voiceEnergyThreshold();
+
+    if (isSpeaking) {
+      voiceExternalLastHeardAt = now;
+      startExternalRecordingSegment();
+      return;
+    }
+
+    if (!voiceExternalRecorder) {
+      return;
+    }
+
+    const recordedMs = now - voiceExternalRecordingStartedAt;
+    const silentMs = now - voiceExternalLastHeardAt;
+    if (
+      recordedMs >= VOICE_EXTERNAL_MAX_RECORDING_MS ||
+      (recordedMs >= VOICE_EXTERNAL_MIN_RECORDING_MS && silentMs >= VOICE_EXTERNAL_SILENCE_MS)
+    ) {
+      stopExternalRecordingSegment(recognitionId);
+    }
+  }
+
+  async function startExternalVoiceRecognition(options: { persist?: boolean; announce?: boolean } = {}): Promise<void> {
+    state.voiceEnabled = true;
+    voiceIntentionalStop = false;
+    clearTimer(voiceRestartTimer);
+    voiceRestartTimer = undefined;
+
+    if (options.persist ?? true) {
+      localStorage.setItem(VOICE_ENABLED_STORAGE_KEY, "1");
+    }
+
+    if (activeSpeechAudio || voicePausedForAiSpeech || isVoiceSelfSpeechSuppressed()) {
+      voicePausedForAiSpeech = true;
+      syncVoiceControls();
+      const delayMs = Math.max(VOICE_SELF_SPEECH_COOLDOWN_MS, voiceSelfSpeechSuppressedUntil - Date.now());
+      resumeVoiceRecognitionAfterAiSpeech(delayMs);
+      return;
+    }
+
+    try {
+      if (typeof MediaRecorder === "undefined") {
+        throw new Error("当前 WebView 不支持 MediaRecorder，无法使用高精度 ASR。");
+      }
+      closeExternalVoiceAudio();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextConstructor) {
+        throw new Error("当前 WebView 不支持 AudioContext，无法进行自动切句。");
+      }
+      const context = new AudioContextConstructor();
+      const source = context.createMediaStreamSource(stream);
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.15;
+      source.connect(analyser);
+
+      const recognitionId = ++voiceRecognitionId;
+      voiceMediaStream = stream;
+      voiceAudioContext = context;
+      voiceAnalyser = analyser;
+      voiceLevelTimer = window.setInterval(() => pollExternalVoiceLevel(recognitionId), 90);
+      syncVoiceControls();
+      setVoiceStatus("高精度 ASR 监听已开启，说话后会按静音自动切句识别。", "warm");
+      if (options.announce) {
+        setBubble("高精度语音监听开启啦。", "hint", 1900);
+      }
+    } catch (error) {
+      console.error(error);
+      state.voiceEnabled = false;
+      localStorage.setItem(VOICE_ENABLED_STORAGE_KEY, "0");
+      closeExternalVoiceAudio();
+      syncVoiceControls();
+      setVoiceStatus(`高精度识别麦克风启动失败：${String(error)}`, "alert");
+      setBubble("麦克风没有接上，检查一下权限。", "alert", 2200);
+    }
+  }
+
   function stopVoiceRecognition(options: { persist?: boolean; announce?: boolean } = {}): void {
     state.voiceEnabled = false;
     voicePausedForAiSpeech = false;
@@ -3009,6 +3374,8 @@ window.addEventListener("DOMContentLoaded", () => {
     } catch (error) {
       console.warn("Failed to stop voice recognition:", error);
     }
+    voiceRecognition = null;
+    closeExternalVoiceAudio();
 
     syncVoiceControls();
     if (options.announce) {
@@ -3023,7 +3390,19 @@ window.addEventListener("DOMContentLoaded", () => {
         continue;
       }
 
-      const alternative = result.item(0);
+      const alternatives = Array.from({ length: result.length }, (_, alternativeIndex) => result.item(alternativeIndex));
+      const alternative = alternatives
+        .filter((item) => item.transcript.trim())
+        .sort((left, right) => {
+          const leftText = left.transcript.replace(/\s+/g, "");
+          const rightText = right.transcript.replace(/\s+/g, "");
+          const leftConfidence = Number.isFinite(left.confidence) ? left.confidence : 1;
+          const rightConfidence = Number.isFinite(right.confidence) ? right.confidence : 1;
+          return rightText.length + rightConfidence * 3 - (leftText.length + leftConfidence * 3);
+        })[0];
+      if (!alternative) {
+        continue;
+      }
       const transcript = alternative.transcript.trim();
       const confidence = Number.isFinite(alternative.confidence) ? alternative.confidence : 1;
       if (!transcript) {
@@ -3058,7 +3437,7 @@ window.addEventListener("DOMContentLoaded", () => {
     const recognition = new Recognition();
     recognition.continuous = true;
     recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
+    recognition.maxAlternatives = 5;
     recognition.lang = voiceLanguage;
     recognition.onaudiostart = () => {
       if (voicePausedForAiSpeech || isVoiceSelfSpeechSuppressed()) {
@@ -3128,6 +3507,11 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   async function startVoiceRecognition(options: { persist?: boolean; announce?: boolean } = {}): Promise<void> {
+    if (asrConfig.provider === "openAiCompatible") {
+      await startExternalVoiceRecognition(options);
+      return;
+    }
+
     if (!getSpeechRecognitionConstructor()) {
       syncVoiceControls();
       setBubble("当前环境不支持语音识别。", "alert", 2200);
@@ -3152,6 +3536,7 @@ window.addEventListener("DOMContentLoaded", () => {
     }
 
     try {
+      closeExternalVoiceAudio();
       await requestMicrophonePermission();
       const previousRecognition = voiceRecognition;
       const recognitionId = ++voiceRecognitionId;
@@ -3194,6 +3579,7 @@ window.addEventListener("DOMContentLoaded", () => {
       console.warn("Failed to restart voice recognition:", error);
     }
     voiceRecognition = null;
+    closeExternalVoiceAudio();
     window.setTimeout(() => {
       void startVoiceRecognition({ persist: false, announce: false });
     }, 180);
@@ -4826,6 +5212,20 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  asrProviderSelect.addEventListener("change", () => {
+    syncVoiceControls();
+    setVoiceStatus(
+      asrProviderSelect.value === "openAiCompatible"
+        ? "已切到高精度 ASR，请保存配置后重启监听。"
+        : "已切到系统 WebView 识别，请保存配置后重启监听。",
+      "idle",
+    );
+  });
+
+  asrSaveButton.addEventListener("click", () => {
+    void saveAsrSettings();
+  });
+
   voiceLanguageSelect.addEventListener("change", () => {
     voiceLanguage = voiceLanguageSelect.value || "zh-CN";
     localStorage.setItem(VOICE_LANGUAGE_STORAGE_KEY, voiceLanguage);
@@ -5287,8 +5687,9 @@ window.addEventListener("DOMContentLoaded", () => {
   setInteractionTool(savedInteractionTool, { persist: false });
   state.voiceEnabled = savedVoiceEnabled;
   syncVoiceControls();
+  const asrSettingsLoaded = loadAsrSettings();
   if (savedVoiceEnabled && IS_PET_WINDOW) {
-    void startVoiceRecognition({ persist: false, announce: false });
+    void asrSettingsLoaded.then(() => startVoiceRecognition({ persist: false, announce: false }));
   }
   if (IS_MASK_EDITOR_WINDOW) {
     settingsPanel.hidden = false;
@@ -5301,15 +5702,18 @@ window.addEventListener("DOMContentLoaded", () => {
     renderSkinDeleteOptions();
     syncInteractionToolEditor();
     syncVoiceControls();
+    void asrSettingsLoaded;
     void loadTtsSettings();
     void loadLlmSettings();
   } else if (IS_MOBILE_PET_WINDOW) {
     state.dockedToCorner = false;
     void applyScale(savedScale, { persist: false, showBubble: false });
     syncVoiceControls();
+    void asrSettingsLoaded;
     void loadTtsSettings();
   } else {
     void applyScale(savedScale, { persist: false, showBubble: false, ensureDocked: true });
+    void asrSettingsLoaded;
     void loadTtsSettings();
   }
   void loadCustomPetSkins(savedSkin);
@@ -5320,6 +5724,12 @@ window.addEventListener("DOMContentLoaded", () => {
     });
     void listen<TtsConfigView>("tts-config-updated", (event) => {
       applyTtsConfig(event.payload);
+    });
+    void listen<AsrConfigView>("asr-config-updated", (event) => {
+      applyAsrConfig(event.payload);
+      if (state.voiceEnabled) {
+        restartVoiceRecognition();
+      }
     });
   }
 

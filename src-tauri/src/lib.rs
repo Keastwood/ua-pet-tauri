@@ -26,6 +26,7 @@ const DEFAULT_LLM_TIMEOUT_SECS: u64 = 45;
 const DEFAULT_TTS_TIMEOUT_SECS: u64 = 60;
 const LLM_CONFIG_FILE: &str = "llm_config.json";
 const TTS_CONFIG_FILE: &str = "tts_config.json";
+const ASR_CONFIG_FILE: &str = "asr_config.json";
 const MANAGED_GPT_SOVITS_CONFIG_FILE: &str = "managed-gpt-sovits-yua-v2.yaml";
 const INTERACTION_HISTORY_FILE: &str = "interaction_history.json";
 const CUSTOM_SKINS_DIR: &str = "custom_skins";
@@ -34,6 +35,13 @@ const TTS_PROVIDER_GPT_SOVITS: &str = "gptSovits";
 const TTS_PROVIDER_MANAGED_GPT_SOVITS: &str = "managedGptSovits";
 const TTS_PROVIDER_OPENAI_COMPATIBLE: &str = "openAiCompatible";
 const TTS_PROVIDER_CUSTOM_JSON: &str = "customJson";
+const ASR_PROVIDER_BROWSER: &str = "browser";
+const ASR_PROVIDER_OPENAI_COMPATIBLE: &str = "openAiCompatible";
+const DEFAULT_ASR_BASE_URL: &str = "https://api.openai.com/v1";
+const DEFAULT_ASR_MODEL: &str = "whisper-1";
+const DEFAULT_ASR_TIMEOUT_SECS: u64 = 45;
+const DEFAULT_ASR_PROMPT: &str =
+    "请按简体中文原话转写，保留口语、网络用语、脏话、成人用语和语气词，不要替换成委婉说法。";
 const DEFAULT_MANAGED_GPT_SOVITS_PORT: u16 = 9880;
 const DEFAULT_MANAGED_GPT_SOVITS_ROOT: &str = r"D:\pyprojects\GPT-SoVITS";
 const DEFAULT_YUA_GPT_WEIGHT_REL: &str = "GPT_weights_v2/yua-s-v2-e50.ckpt";
@@ -237,6 +245,59 @@ struct TtsAssetOption {
     path: String,
     prompt_text: Option<String>,
     duration_secs: Option<f32>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredAsrConfig {
+    provider: Option<String>,
+    endpoint: Option<String>,
+    api_key: Option<String>,
+    model: Option<String>,
+    language: Option<String>,
+    prompt: Option<String>,
+    timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveAsrConfigRequest {
+    provider: String,
+    endpoint: String,
+    api_key: Option<String>,
+    clear_api_key: bool,
+    model: Option<String>,
+    language: Option<String>,
+    prompt: Option<String>,
+    timeout_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AsrConfigView {
+    provider: String,
+    endpoint: String,
+    has_api_key: bool,
+    masked_api_key: Option<String>,
+    model: String,
+    language: String,
+    prompt: String,
+    timeout_secs: u64,
+    default_prompt: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AsrTranscriptionRequest {
+    audio_data_url: String,
+    mime_type: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AsrTranscriptionResponse {
+    text: String,
+    provider: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -577,6 +638,15 @@ fn clean_optional(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn clean_optional_str(value: &str) -> Option<String> {
+    let cleaned = value.trim().to_string();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
 fn clean_required(value: &str, field: &str) -> Result<String, String> {
     let cleaned = value.trim().to_string();
     if cleaned.is_empty() {
@@ -909,6 +979,15 @@ fn tts_config_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join(TTS_CONFIG_FILE))
 }
 
+fn asr_config_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| format!("获取应用配置目录失败：{error}"))?;
+    fs::create_dir_all(&dir).map_err(|error| format!("创建应用配置目录失败：{error}"))?;
+    Ok(dir.join(ASR_CONFIG_FILE))
+}
+
 fn interaction_history_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
@@ -983,6 +1062,24 @@ fn decode_data_url(data_url: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+fn decode_audio_data_url(data_url: &str) -> Result<Vec<u8>, String> {
+    const MAX_AUDIO_BYTES: usize = 32 * 1024 * 1024;
+    let encoded = data_url
+        .split_once(',')
+        .map(|(_, encoded)| encoded)
+        .unwrap_or(data_url)
+        .trim();
+    let bytes = general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|error| format!("解析音频数据失败：{error}"))?;
+
+    if bytes.len() > MAX_AUDIO_BYTES {
+        return Err("音频片段太大了，请缩短单句时长。".to_string());
+    }
+
+    Ok(bytes)
+}
+
 fn write_skin_data_url(path: &Path, data_url: &str) -> Result<(), String> {
     let bytes = decode_data_url(data_url)?;
     fs::write(path, bytes).map_err(|error| format!("保存皮肤图片失败：{error}"))
@@ -1028,6 +1125,17 @@ fn load_stored_tts_config(app: &AppHandle) -> Result<StoredTtsConfig, String> {
     let text = fs::read_to_string(&path).map_err(|error| format!("读取语音配置失败：{error}"))?;
     serde_json::from_str::<StoredTtsConfig>(&text)
         .map_err(|error| format!("解析语音配置失败：{error}"))
+}
+
+fn load_stored_asr_config(app: &AppHandle) -> Result<StoredAsrConfig, String> {
+    let path = asr_config_path(app)?;
+    if !path.exists() {
+        return Ok(StoredAsrConfig::default());
+    }
+
+    let text = fs::read_to_string(&path).map_err(|error| format!("读取识别配置失败：{error}"))?;
+    serde_json::from_str::<StoredAsrConfig>(&text)
+        .map_err(|error| format!("解析识别配置失败：{error}"))
 }
 
 fn load_interaction_history(app: &AppHandle) -> Result<Vec<InteractionRecord>, String> {
@@ -1140,6 +1248,13 @@ fn save_stored_tts_config(app: &AppHandle, config: &StoredTtsConfig) -> Result<(
     fs::write(&path, text).map_err(|error| format!("保存语音配置失败：{error}"))
 }
 
+fn save_stored_asr_config(app: &AppHandle, config: &StoredAsrConfig) -> Result<(), String> {
+    let path = asr_config_path(app)?;
+    let text = serde_json::to_string_pretty(config)
+        .map_err(|error| format!("序列化识别配置失败：{error}"))?;
+    fs::write(&path, text).map_err(|error| format!("保存识别配置失败：{error}"))
+}
+
 fn mask_api_key(api_key: &str) -> String {
     let chars: Vec<char> = api_key.chars().collect();
     if chars.len() <= 8 {
@@ -1197,6 +1312,55 @@ fn normalize_tts_provider(provider: Option<String>) -> String {
             TTS_PROVIDER_CUSTOM_JSON.to_string()
         }
         _ => TTS_PROVIDER_GPT_SOVITS.to_string(),
+    }
+}
+
+fn normalize_asr_provider(provider: Option<String>) -> String {
+    match provider
+        .as_deref()
+        .unwrap_or(ASR_PROVIDER_BROWSER)
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "openai" | "openaicompatible" | "openai-compatible" | "open_ai_compatible" | "whisper" => {
+            ASR_PROVIDER_OPENAI_COMPATIBLE.to_string()
+        }
+        _ => ASR_PROVIDER_BROWSER.to_string(),
+    }
+}
+
+fn asr_config_view(config: &StoredAsrConfig) -> AsrConfigView {
+    let provider = normalize_asr_provider(config.provider.clone());
+    let api_key = clean_optional(config.api_key.clone())
+        .or_else(|| read_env(&["ASR_API_KEY", "OPENAI_API_KEY"]));
+    let endpoint = clean_optional(config.endpoint.clone())
+        .or_else(|| read_env(&["ASR_BASE_URL", "OPENAI_BASE_URL"]))
+        .unwrap_or_else(|| DEFAULT_ASR_BASE_URL.to_string());
+    let model = clean_optional(config.model.clone())
+        .or_else(|| read_env(&["ASR_MODEL"]))
+        .unwrap_or_else(|| DEFAULT_ASR_MODEL.to_string());
+    let language = clean_optional(config.language.clone()).unwrap_or_else(|| "zh".to_string());
+    let prompt =
+        clean_optional(config.prompt.clone()).unwrap_or_else(|| DEFAULT_ASR_PROMPT.to_string());
+    let timeout_secs = config
+        .timeout_secs
+        .unwrap_or_else(|| {
+            parse_env_u64("ASR_TIMEOUT_SECS", DEFAULT_ASR_TIMEOUT_SECS)
+                .unwrap_or(DEFAULT_ASR_TIMEOUT_SECS)
+        })
+        .clamp(5, 300);
+
+    AsrConfigView {
+        provider,
+        endpoint,
+        has_api_key: api_key.is_some(),
+        masked_api_key: api_key.as_deref().map(mask_api_key),
+        model,
+        language,
+        prompt,
+        timeout_secs,
+        default_prompt: DEFAULT_ASR_PROMPT.to_string(),
     }
 }
 
@@ -1334,6 +1498,17 @@ fn tts_endpoint_url(provider: &str, endpoint: &str) -> String {
         }
     } else {
         trimmed.to_string()
+    }
+}
+
+fn asr_endpoint_url(endpoint: &str) -> String {
+    let trimmed = endpoint.trim().trim_end_matches('/');
+    if trimmed.ends_with("/audio/transcriptions") {
+        trimmed.to_string()
+    } else if trimmed.ends_with("/v1") {
+        format!("{trimmed}/audio/transcriptions")
+    } else {
+        format!("{trimmed}/v1/audio/transcriptions")
     }
 }
 
@@ -1947,6 +2122,38 @@ fn get_tts_config(app: AppHandle) -> Result<TtsConfigView, String> {
 }
 
 #[tauri::command]
+fn get_asr_config(app: AppHandle) -> Result<AsrConfigView, String> {
+    let config = load_stored_asr_config(&app)?;
+    Ok(asr_config_view(&config))
+}
+
+#[tauri::command]
+fn save_asr_config(app: AppHandle, request: SaveAsrConfigRequest) -> Result<AsrConfigView, String> {
+    let mut stored = load_stored_asr_config(&app)?;
+    let provider = normalize_asr_provider(Some(request.provider));
+    stored.provider = Some(provider.clone());
+    stored.endpoint = Some(clean_required(&request.endpoint, "识别服务地址")?);
+    stored.model = clean_optional(request.model);
+    stored.language = clean_optional(request.language);
+    stored.prompt = clean_optional(request.prompt);
+    stored.timeout_secs = Some(request.timeout_secs.clamp(5, 300));
+
+    if request.clear_api_key {
+        stored.api_key = None;
+    } else if let Some(api_key) = clean_optional(request.api_key) {
+        stored.api_key = Some(api_key);
+    }
+
+    let view = asr_config_view(&stored);
+    if view.provider == ASR_PROVIDER_OPENAI_COMPATIBLE && view.model.trim().is_empty() {
+        return Err("高精度识别需要填写模型名。".to_string());
+    }
+    save_stored_asr_config(&app, &stored)?;
+    let _ = app.emit("asr-config-updated", view.clone());
+    Ok(view)
+}
+
+#[tauri::command]
 fn save_tts_config(app: AppHandle, request: SaveTtsConfigRequest) -> Result<TtsConfigView, String> {
     let mut stored = load_stored_tts_config(&app)?;
     stored.enabled = Some(request.enabled);
@@ -2102,6 +2309,96 @@ async fn synthesize_speech(
     Ok(TtsSynthesisResponse {
         audio_data_url,
         content_type,
+        provider: config.provider,
+    })
+}
+
+#[tauri::command]
+async fn transcribe_speech(
+    app: AppHandle,
+    request: AsrTranscriptionRequest,
+) -> Result<AsrTranscriptionResponse, String> {
+    let stored = load_stored_asr_config(&app)?;
+    let config = asr_config_view(&stored);
+    if config.provider != ASR_PROVIDER_OPENAI_COMPATIBLE {
+        return Err("当前识别模式不是高精度 ASR。".to_string());
+    }
+
+    let audio_bytes = decode_audio_data_url(&request.audio_data_url)?;
+    if audio_bytes.is_empty() {
+        return Err("音频片段为空。".to_string());
+    }
+
+    let content_type = request
+        .mime_type
+        .as_deref()
+        .and_then(clean_optional_str)
+        .unwrap_or_else(|| "audio/webm".to_string());
+    let extension = if content_type.contains("wav") {
+        "wav"
+    } else if content_type.contains("mpeg") || content_type.contains("mp3") {
+        "mp3"
+    } else if content_type.contains("ogg") {
+        "ogg"
+    } else if content_type.contains("mp4") || content_type.contains("m4a") {
+        "m4a"
+    } else {
+        "webm"
+    };
+
+    let part = reqwest::multipart::Part::bytes(audio_bytes)
+        .file_name(format!("speech.{extension}"))
+        .mime_str(&content_type)
+        .map_err(|error| format!("设置识别音频类型失败：{error}"))?;
+    let mut form = reqwest::multipart::Form::new()
+        .part("file", part)
+        .text("model", config.model.clone())
+        .text("response_format", "json");
+    if let Some(language) = clean_optional_str(&config.language) {
+        form = form.text("language", language);
+    }
+    if let Some(prompt) = clean_optional_str(&config.prompt) {
+        form = form.text("prompt", prompt);
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(config.timeout_secs))
+        .build()
+        .map_err(|error| format!("创建识别 HTTP 客户端失败：{error}"))?;
+    let mut http_request = client
+        .post(asr_endpoint_url(&config.endpoint))
+        .multipart(form);
+    if let Some(api_key) =
+        clean_optional(stored.api_key).or_else(|| read_env(&["ASR_API_KEY", "OPENAI_API_KEY"]))
+    {
+        http_request = http_request.bearer_auth(api_key);
+    }
+
+    let response = http_request
+        .send()
+        .await
+        .map_err(|error| format!("语音识别请求失败：{error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("读取识别响应失败：{error}"))?;
+    if !status.is_success() {
+        return Err(format!("语音识别服务返回 {status}：{body}"));
+    }
+
+    let json: serde_json::Value =
+        serde_json::from_str(&body).map_err(|error| format!("解析识别响应失败：{error}"))?;
+    let text = json
+        .get("text")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("识别响应缺少 text 字段：{body}"))?
+        .to_string();
+
+    Ok(AsrTranscriptionResponse {
+        text,
         provider: config.provider,
     })
 }
@@ -3099,6 +3396,7 @@ pub fn run() {
             clear_interaction_history,
             close_current_window,
             delete_custom_skin,
+            get_asr_config,
             get_llm_config,
             get_interaction_history,
             get_pet_cursor_position,
@@ -3111,9 +3409,11 @@ pub fn run() {
             llm_pet_interact_stream,
             pick_tts_path,
             save_llm_config,
+            save_asr_config,
             save_tts_config,
             save_custom_skin,
             synthesize_speech,
+            transcribe_speech,
             move_pet_window,
             open_mask_editor,
             open_settings_menu,

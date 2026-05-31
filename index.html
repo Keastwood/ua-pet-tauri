@@ -105,6 +105,51 @@
                 </label>
 
                 <label class="settings-field">
+                  <span>识别引擎</span>
+                  <select id="asr-provider-select" class="skin-importer__select">
+                    <option value="browser">系统 WebView 识别</option>
+                    <option value="openAiCompatible">高精度 ASR（OpenAI 兼容）</option>
+                  </select>
+                </label>
+
+                <label class="settings-field" data-asr-external-field hidden>
+                  <span>识别服务地址</span>
+                  <input id="asr-endpoint-input" type="url" autocomplete="off" spellcheck="false" placeholder="https://api.openai.com/v1" />
+                </label>
+
+                <div class="settings-grid settings-grid--two" data-asr-external-field hidden>
+                  <label class="settings-field">
+                    <span>识别模型</span>
+                    <input id="asr-model-input" type="text" autocomplete="off" spellcheck="false" placeholder="whisper-1 / 本地模型名" />
+                  </label>
+                  <label class="settings-field">
+                    <span>接口语言</span>
+                    <input id="asr-language-input" type="text" autocomplete="off" spellcheck="false" placeholder="zh" />
+                  </label>
+                </div>
+
+                <label class="settings-field" data-asr-external-field hidden>
+                  <span>识别提示词</span>
+                  <textarea id="asr-prompt-input" rows="3" spellcheck="false" placeholder="用于提示 ASR 保留简体中文口语、脏话、成人用语等原文"></textarea>
+                </label>
+
+                <div class="settings-grid settings-grid--two" data-asr-external-field hidden>
+                  <label class="settings-field">
+                    <span>超时秒数</span>
+                    <input id="asr-timeout-input" type="number" min="5" max="300" step="1" value="45" />
+                  </label>
+                  <label class="settings-field">
+                    <span>API Key</span>
+                    <input id="asr-api-key-input" type="password" autocomplete="off" spellcheck="false" />
+                  </label>
+                </div>
+
+                <label class="settings-check" data-asr-external-field hidden>
+                  <input id="asr-clear-key-input" type="checkbox" />
+                  <span>清除已保存的识别 API Key</span>
+                </label>
+
+                <label class="settings-field">
                   <span>识别语言</span>
                   <select id="voice-language-select" class="skin-importer__select">
                     <option value="zh-CN">中文普通话</option>
@@ -122,6 +167,7 @@
                 <p id="voice-status" class="settings-status" data-tone="idle">开启后，说话内容会作为语音命令发送给 LLM。AI 发声时会自动暂停麦克风，避免音响回声触发循环。</p>
 
                 <div class="settings-actions settings-actions--spread">
+                  <button id="asr-save-btn" class="settings-btn settings-btn--primary" type="button">保存识别配置</button>
                   <button id="voice-test-btn" class="settings-btn" type="button">测试麦克风</button>
                   <button id="voice-restart-btn" class="settings-btn" type="button">重启监听</button>
                 </div>
