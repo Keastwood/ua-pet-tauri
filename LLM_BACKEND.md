@@ -86,6 +86,8 @@ When AI voice is enabled, the frontend calls `synthesize_speech` after a reply i
 
 If microphone listening is enabled at the same time, the frontend gates recognition around its own audio output: it aborts active Web Speech recognition before playback, suppresses recognition during playback and a short cooldown, then restarts listening automatically. It also keeps a short-lived cache of recently spoken assistant text and drops highly similar transcripts, which prevents speaker output from feeding back into the LLM as a new voice command.
 
+Idle chatter is configured independently in the display settings. The frontend stores its enabled state, interval, and whether idle chatter should use TTS in localStorage. Idle chatter is skipped while the pet is talking, surprised, playing audio, waiting for an LLM response, or while settings/history/floating input panels are open.
+
 ## Interaction Tools
 
 The current selectable tools are defined in `src/main.ts` as `INTERACTION_TOOLS`:

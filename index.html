@@ -442,6 +442,25 @@
                 </div>
                 <p id="interaction-tool-editor-status" class="settings-hint">保存后，侧边栏控件和 LLM 互动会使用新的名称、方式、图标和提示词。</p>
               </div>
+
+              <div class="settings-subcard">
+                <h3>自动发言</h3>
+                <label class="settings-check">
+                  <input id="auto-chatter-enabled-input" type="checkbox" />
+                  <span>允许桌宠周期性自动发言</span>
+                </label>
+                <div class="settings-grid settings-grid--two">
+                  <label class="settings-field">
+                    <span>周期秒数</span>
+                    <input id="auto-chatter-interval-input" type="number" min="10" max="3600" step="5" value="60" />
+                  </label>
+                  <label class="settings-check">
+                    <input id="auto-chatter-tts-input" type="checkbox" />
+                    <span>自动发言也使用语音合成</span>
+                  </label>
+                </div>
+                <p id="auto-chatter-status" class="settings-status" data-tone="idle">自动发言会避开当前对话、语音播放和打开的输入/设置面板。</p>
+              </div>
             </section>
           </div>
         </aside>

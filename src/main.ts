@@ -329,6 +329,12 @@ const VOICE_LANGUAGE_STORAGE_KEY = "silver-pet.voice-language.v1";
 const VOICE_SELF_SPEECH_COOLDOWN_MS = 1400;
 const VOICE_RECENT_AI_SPEECH_TTL_MS = 12_000;
 const VOICE_SELF_SPEECH_SIMILARITY_THRESHOLD = 0.72;
+const AUTO_CHATTER_ENABLED_STORAGE_KEY = "silver-pet.auto-chatter-enabled.v1";
+const AUTO_CHATTER_INTERVAL_STORAGE_KEY = "silver-pet.auto-chatter-interval-secs.v1";
+const AUTO_CHATTER_TTS_STORAGE_KEY = "silver-pet.auto-chatter-tts.v1";
+const DEFAULT_AUTO_CHATTER_INTERVAL_SECS = 60;
+const MIN_AUTO_CHATTER_INTERVAL_SECS = 10;
+const MAX_AUTO_CHATTER_INTERVAL_SECS = 3600;
 const MAX_FAVORITE_SKINS = 4;
 const PET_LLM_SYSTEM_PROMPT =
   "你是一个银白发桌宠，会陪用户工作和休息。请用中文回复，语气温柔、俏皮、像桌宠在说话。每次只说一句，控制在 36 个汉字以内，不要解释，不要加引号。";
@@ -973,6 +979,14 @@ function getVoiceTextSimilarity(left: string, right: string): number {
   return (2 * lcs) / (a.length + b.length);
 }
 
+function clampAutoChatterInterval(value: number): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_AUTO_CHATTER_INTERVAL_SECS;
+  }
+
+  return Math.min(MAX_AUTO_CHATTER_INTERVAL_SECS, Math.max(MIN_AUTO_CHATTER_INTERVAL_SECS, Math.round(value)));
+}
+
 function customSkinViewToDefinition(skin: CustomSkinView): PetSkinDefinition {
   return {
     id: skin.id,
@@ -1204,6 +1218,10 @@ window.addEventListener("DOMContentLoaded", () => {
   const interactionToolResetButton = must<HTMLButtonElement>("#interaction-tool-reset-btn");
   const interactionToolSaveButton = must<HTMLButtonElement>("#interaction-tool-save-btn");
   const interactionToolEditorStatus = must<HTMLParagraphElement>("#interaction-tool-editor-status");
+  const autoChatterEnabledInput = must<HTMLInputElement>("#auto-chatter-enabled-input");
+  const autoChatterIntervalInput = must<HTMLInputElement>("#auto-chatter-interval-input");
+  const autoChatterTtsInput = must<HTMLInputElement>("#auto-chatter-tts-input");
+  const autoChatterStatus = must<HTMLParagraphElement>("#auto-chatter-status");
   const skinValue = must<HTMLElement>("#skin-value");
   const skinButtons = must<HTMLDivElement>("#skin-buttons");
   const skinFileInput = must<HTMLInputElement>("#skin-file-input");
@@ -1263,6 +1281,12 @@ window.addEventListener("DOMContentLoaded", () => {
   let ttsAssetCatalogRequestId = 0;
   let recentAiSpeechTexts: Array<{ text: string; expiresAt: number }> = [];
   let activeSpeechAudio: HTMLAudioElement | null = null;
+  let autoChatterEnabled = localStorage.getItem(AUTO_CHATTER_ENABLED_STORAGE_KEY) !== "0";
+  let autoChatterIntervalSecs = clampAutoChatterInterval(
+    Number(localStorage.getItem(AUTO_CHATTER_INTERVAL_STORAGE_KEY) ?? DEFAULT_AUTO_CHATTER_INTERVAL_SECS),
+  );
+  let autoChatterUseTts = localStorage.getItem(AUTO_CHATTER_TTS_STORAGE_KEY) === "1";
+  let activeLlmRequests = 0;
   let maskEditorParts = cloneBodyMaskParts(getBodyMasksForSkin(activeSkin));
   let selectedMaskPartId = maskEditorParts[0]?.id ?? "";
   let selectedMaskTool: MaskTool = "move";
@@ -2529,6 +2553,25 @@ window.addEventListener("DOMContentLoaded", () => {
   function setTtsStatus(text: string, tone: Tone | "idle" = "idle"): void {
     ttsStatus.textContent = text;
     ttsStatus.dataset.tone = tone;
+  }
+
+  function setAutoChatterStatus(text: string, tone: Tone | "idle" = "idle"): void {
+    autoChatterStatus.textContent = text;
+    autoChatterStatus.dataset.tone = tone;
+  }
+
+  function syncAutoChatterControls(): void {
+    autoChatterEnabledInput.checked = autoChatterEnabled;
+    autoChatterIntervalInput.value = String(autoChatterIntervalSecs);
+    autoChatterIntervalInput.disabled = !autoChatterEnabled;
+    autoChatterTtsInput.checked = autoChatterUseTts;
+    autoChatterTtsInput.disabled = !autoChatterEnabled;
+    setAutoChatterStatus(
+      autoChatterEnabled
+        ? `自动发言已开启，每 ${autoChatterIntervalSecs} 秒检查一次；${autoChatterUseTts ? "会" : "不会"}使用语音合成。`
+        : "自动发言已关闭。",
+      "idle",
+    );
   }
 
   function clampTtsTimeoutSeconds(value: number): number {
@@ -3999,6 +4042,7 @@ window.addEventListener("DOMContentLoaded", () => {
     userText?: string,
   ): Promise<void> {
     const requestId = ++llmRequestId;
+    activeLlmRequests += 1;
     const { xPercent, yPercent } = getPetPointerPosition(event);
     const selectedTool = getInteractionTool(state.selectedInteractionTool);
     const interactionTool = source === "click" ? `${selectedTool.label}（${selectedTool.verb}）` : null;
@@ -4081,6 +4125,7 @@ window.addEventListener("DOMContentLoaded", () => {
         startTalking("这次互动记录失败了，我先把反应留在心里。", 2200);
       }
     } finally {
+      activeLlmRequests = Math.max(0, activeLlmRequests - 1);
       unlisten();
     }
   }
@@ -4207,7 +4252,7 @@ window.addEventListener("DOMContentLoaded", () => {
     }, delay);
   }
 
-  function startTalking(text: string, duration = 1800): void {
+  function startTalking(text: string, duration = 1800, options: { useTts?: boolean } = {}): void {
     clearTimer(state.surpriseTimeout);
     clearTimer(state.talkInterval);
     state.surprised = false;
@@ -4225,7 +4270,9 @@ window.addEventListener("DOMContentLoaded", () => {
     }, 120);
 
     setBubble(text, "warm", duration + 400);
-    void playAiSpeech(text);
+    if (options.useTts ?? true) {
+      void playAiSpeech(text);
+    }
     updateStatus();
 
     state.surpriseTimeout = window.setTimeout(() => {
@@ -4235,14 +4282,19 @@ window.addEventListener("DOMContentLoaded", () => {
 
   async function startSmartChat(): Promise<void> {
     const requestId = ++llmRequestId;
+    activeLlmRequests += 1;
     startTalking("我想想，给你现场编一句。", 1200);
 
-    const reply = await requestLlmPetLine();
-    if (requestId !== llmRequestId) {
-      return;
-    }
+    try {
+      const reply = await requestLlmPetLine();
+      if (requestId !== llmRequestId) {
+        return;
+      }
 
-    startTalking(reply ?? pick(chatLines), reply ? 2300 : 2000);
+      startTalking(reply ?? pick(chatLines), reply ? 2300 : 2000);
+    } finally {
+      activeLlmRequests = Math.max(0, activeLlmRequests - 1);
+    }
   }
 
   function startSurprise(text: string, duration = 950): void {
@@ -4483,14 +4535,25 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function startIdleChatter(): void {
     clearTimer(state.idleChatterInterval);
+    state.idleChatterInterval = undefined;
+    if (!autoChatterEnabled) {
+      return;
+    }
+
     state.idleChatterInterval = window.setInterval(() => {
-      if (state.talking || state.surprised) {
+      if (
+        state.talking ||
+        state.surprised ||
+        activeSpeechAudio ||
+        activeLlmRequests > 0 ||
+        !settingsPanel.hidden ||
+        !historyPanel.hidden ||
+        !floatingInput.hidden
+      ) {
         return;
       }
-      if (Math.random() < 0.42) {
-        startTalking(pick(chatLines), 1850);
-      }
-    }, 14000);
+      startTalking(pick(chatLines), 1850, { useTts: autoChatterUseTts });
+    }, autoChatterIntervalSecs * 1000);
   }
 
   petStage.querySelectorAll<HTMLButtonElement>(".hitbox").forEach((button) => {
@@ -4967,6 +5030,26 @@ window.addEventListener("DOMContentLoaded", () => {
     resetInteractionTools();
   });
 
+  autoChatterEnabledInput.addEventListener("change", () => {
+    autoChatterEnabled = autoChatterEnabledInput.checked;
+    localStorage.setItem(AUTO_CHATTER_ENABLED_STORAGE_KEY, autoChatterEnabled ? "1" : "0");
+    syncAutoChatterControls();
+    startIdleChatter();
+  });
+
+  autoChatterIntervalInput.addEventListener("change", () => {
+    autoChatterIntervalSecs = clampAutoChatterInterval(Number(autoChatterIntervalInput.value));
+    localStorage.setItem(AUTO_CHATTER_INTERVAL_STORAGE_KEY, String(autoChatterIntervalSecs));
+    syncAutoChatterControls();
+    startIdleChatter();
+  });
+
+  autoChatterTtsInput.addEventListener("change", () => {
+    autoChatterUseTts = autoChatterTtsInput.checked;
+    localStorage.setItem(AUTO_CHATTER_TTS_STORAGE_KEY, autoChatterUseTts ? "1" : "0");
+    syncAutoChatterControls();
+  });
+
   skinAddButton.addEventListener("click", () => {
     skinFileInput.click();
   });
@@ -5178,6 +5261,7 @@ window.addEventListener("DOMContentLoaded", () => {
   syncAvailablePetSkins();
   renderSkinButtons();
   setSettingsTab(IS_MASK_EDITOR_WINDOW ? "mask" : "llm");
+  syncAutoChatterControls();
   updateStatus();
   bubble.dataset.show = "false";
   blinkLayer.hidden = true;
