@@ -3051,9 +3051,11 @@ pub fn run() {
         )
         .setup(|app| {
             let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space);
-            app.global_shortcut()
-                .register(shortcut)
-                .map_err(|error| format!("register global shortcut failed: {error}"))?;
+            if let Err(error) = app.global_shortcut().register(shortcut) {
+                eprintln!(
+                    "global shortcut {PET_INPUT_SHORTCUT_LABEL} is unavailable; continuing without it: {error}"
+                );
+            }
             Ok(())
         });
 
