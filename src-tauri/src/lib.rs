@@ -24,14 +24,15 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 use tauri_plugin_opener::OpenerExt;
 #[cfg(windows)]
 use windows::{
-    core::{Ref, HSTRING},
+    core::{AgileReference, Ref, HSTRING},
     Foundation::TypedEventHandler,
     Globalization::Language,
     Media::SpeechRecognition::{
         SpeechContinuousRecognitionCompletedEventArgs, SpeechContinuousRecognitionMode,
         SpeechContinuousRecognitionResultGeneratedEventArgs, SpeechContinuousRecognitionSession,
-        SpeechRecognitionConfidence, SpeechRecognitionResultStatus, SpeechRecognitionScenario,
-        SpeechRecognitionTopicConstraint, SpeechRecognizer,
+        SpeechRecognitionConfidence, SpeechRecognitionHypothesisGeneratedEventArgs,
+        SpeechRecognitionResultStatus, SpeechRecognitionScenario, SpeechRecognitionTopicConstraint,
+        SpeechRecognizer, SpeechRecognizerState, SpeechRecognizerStateChangedEventArgs,
     },
 };
 
@@ -226,6 +227,25 @@ struct NativeSpeechSession {
     session: SpeechContinuousRecognitionSession,
     result_token: i64,
     completed_token: i64,
+    hypothesis_token: i64,
+    state_token: i64,
+    _result_handler: AgileReference<
+        TypedEventHandler<
+            SpeechContinuousRecognitionSession,
+            SpeechContinuousRecognitionResultGeneratedEventArgs,
+        >,
+    >,
+    _completed_handler: AgileReference<
+        TypedEventHandler<
+            SpeechContinuousRecognitionSession,
+            SpeechContinuousRecognitionCompletedEventArgs,
+        >,
+    >,
+    _hypothesis_handler: AgileReference<
+        TypedEventHandler<SpeechRecognizer, SpeechRecognitionHypothesisGeneratedEventArgs>,
+    >,
+    _state_handler:
+        AgileReference<TypedEventHandler<SpeechRecognizer, SpeechRecognizerStateChangedEventArgs>>,
 }
 
 #[cfg(windows)]
@@ -1623,7 +1643,32 @@ fn speech_confidence_value(confidence: SpeechRecognitionConfidence) -> f64 {
 }
 
 #[cfg(windows)]
+fn speech_state_label(state: SpeechRecognizerState) -> &'static str {
+    if state == SpeechRecognizerState::Idle {
+        "idle"
+    } else if state == SpeechRecognizerState::Capturing {
+        "capturing"
+    } else if state == SpeechRecognizerState::Processing {
+        "processing"
+    } else if state == SpeechRecognizerState::SoundStarted {
+        "sound-started"
+    } else if state == SpeechRecognizerState::SoundEnded {
+        "sound-ended"
+    } else if state == SpeechRecognizerState::SpeechDetected {
+        "speech-detected"
+    } else if state == SpeechRecognizerState::Paused {
+        "paused"
+    } else {
+        "unknown"
+    }
+}
+
+#[cfg(windows)]
 fn stop_native_speech_session(session: NativeSpeechSession) {
+    let _ = session.recognizer.RemoveStateChanged(session.state_token);
+    let _ = session
+        .recognizer
+        .RemoveHypothesisGenerated(session.hypothesis_token);
     let _ = session.session.RemoveResultGenerated(session.result_token);
     let _ = session.session.RemoveCompleted(session.completed_token);
     let _ = session
@@ -2387,6 +2432,47 @@ fn start_native_speech_recognition(
         .Completed(&completed_handler)
         .map_err(windows_error)?;
 
+    let hypothesis_app = app.clone();
+    let hypothesis_handler: TypedEventHandler<
+        SpeechRecognizer,
+        SpeechRecognitionHypothesisGeneratedEventArgs,
+    > = TypedEventHandler::new(
+        move |_sender: Ref<SpeechRecognizer>,
+              args: Ref<SpeechRecognitionHypothesisGeneratedEventArgs>| {
+            let args = args.ok()?;
+            let hypothesis = args.Hypothesis()?;
+            let text = hypothesis.Text()?.to_string_lossy().trim().to_string();
+            if !text.is_empty() {
+                let _ =
+                    hypothesis_app.emit("native-speech-status", format!("Windows 正在听：{text}"));
+            }
+            Ok(())
+        },
+    );
+    let hypothesis_token = recognizer
+        .HypothesisGenerated(&hypothesis_handler)
+        .map_err(windows_error)?;
+
+    let state_app = app.clone();
+    let state_handler: TypedEventHandler<SpeechRecognizer, SpeechRecognizerStateChangedEventArgs> =
+        TypedEventHandler::new(
+            move |_sender: Ref<SpeechRecognizer>,
+                  args: Ref<SpeechRecognizerStateChangedEventArgs>| {
+                let args = args.ok()?;
+                let state = args.State()?;
+                let _ =
+                    state_app.emit("native-speech-state", speech_state_label(state).to_string());
+                Ok(())
+            },
+        );
+    let state_token = recognizer
+        .StateChanged(&state_handler)
+        .map_err(windows_error)?;
+    let result_handler_ref = AgileReference::new(&result_handler).map_err(windows_error)?;
+    let completed_handler_ref = AgileReference::new(&completed_handler).map_err(windows_error)?;
+    let hypothesis_handler_ref = AgileReference::new(&hypothesis_handler).map_err(windows_error)?;
+    let state_handler_ref = AgileReference::new(&state_handler).map_err(windows_error)?;
+
     session
         .StartWithModeAsync(SpeechContinuousRecognitionMode::Default)
         .map_err(native_speech_error_message)?
@@ -2401,6 +2487,12 @@ fn start_native_speech_recognition(
         session,
         result_token,
         completed_token,
+        hypothesis_token,
+        state_token,
+        _result_handler: result_handler_ref,
+        _completed_handler: completed_handler_ref,
+        _hypothesis_handler: hypothesis_handler_ref,
+        _state_handler: state_handler_ref,
     });
 
     Ok(())

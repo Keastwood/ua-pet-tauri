@@ -1324,6 +1324,8 @@ window.addEventListener("DOMContentLoaded", () => {
   let voiceIntentionalStop = false;
   let voicePausedForAiSpeech = false;
   let voiceSelfSpeechSuppressedUntil = 0;
+  let nativeSpeechWatchdogTimer: number | undefined;
+  let nativeSpeechLastActivityAt = 0;
   let voiceSensitivity = clampVoiceSensitivity(Number(localStorage.getItem(VOICE_SENSITIVITY_STORAGE_KEY) ?? "6"));
   let voiceLanguage = localStorage.getItem(VOICE_LANGUAGE_STORAGE_KEY) || "zh-CN";
   let asrConfig: AsrConfigView = {
@@ -3037,6 +3039,34 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function clearNativeSpeechWatchdog(): void {
+    clearTimer(nativeSpeechWatchdogTimer);
+    nativeSpeechWatchdogTimer = undefined;
+  }
+
+  function markNativeSpeechActivity(): void {
+    nativeSpeechLastActivityAt = Date.now();
+  }
+
+  function startNativeSpeechWatchdog(): void {
+    clearNativeSpeechWatchdog();
+    markNativeSpeechActivity();
+    nativeSpeechWatchdogTimer = window.setInterval(() => {
+      if (!state.voiceEnabled || asrConfig.provider !== "windowsNative" || voicePausedForAiSpeech) {
+        clearNativeSpeechWatchdog();
+        return;
+      }
+
+      if (Date.now() - nativeSpeechLastActivityAt > 14_000) {
+        setVoiceStatus(
+          "Windows 原生识别已启动，但暂时没有收到声音事件。请确认 Windows 麦克风隐私允许桌面应用访问，或切回 WebView/高精度 ASR。",
+          "hint",
+        );
+        markNativeSpeechActivity();
+      }
+    }, 3000);
+  }
+
   function pruneRecentAiSpeechTexts(now = Date.now()): void {
     recentAiSpeechTexts = recentAiSpeechTexts.filter((item) => item.expiresAt > now);
   }
@@ -3092,6 +3122,7 @@ window.addEventListener("DOMContentLoaded", () => {
     voiceRecognitionId += 1;
     clearTimer(voiceRestartTimer);
     clearTimer(voiceResumeTimer);
+    clearNativeSpeechWatchdog();
     voiceRestartTimer = undefined;
     voiceResumeTimer = undefined;
 
@@ -3394,6 +3425,7 @@ window.addEventListener("DOMContentLoaded", () => {
       });
       syncVoiceControls();
       setVoiceStatus("Windows 原生识别已开启，会使用系统听写链路和系统不雅内容筛选设置。", "warm");
+      startNativeSpeechWatchdog();
       if (options.announce) {
         setBubble("Windows 原生语音监听开启啦。", "hint", 1900);
       }
@@ -3401,6 +3433,7 @@ window.addEventListener("DOMContentLoaded", () => {
       console.error(error);
       state.voiceEnabled = false;
       localStorage.setItem(VOICE_ENABLED_STORAGE_KEY, "0");
+      clearNativeSpeechWatchdog();
       syncVoiceControls();
       setVoiceStatus(`Windows 原生识别启动失败：${String(error)}`, "alert");
       setBubble("Windows 原生识别没启动成功。", "alert", 2200);
@@ -3640,6 +3673,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     voiceIntentionalStop = true;
     voiceRecognitionId += 1;
+    clearNativeSpeechWatchdog();
     try {
       voiceRecognition?.abort();
     } catch (error) {
@@ -5818,11 +5852,26 @@ window.addEventListener("DOMContentLoaded", () => {
       if (asrConfig.provider !== "windowsNative" || voicePausedForAiSpeech) {
         return;
       }
+      markNativeSpeechActivity();
       handleFinalVoiceTranscript(event.payload.transcript, event.payload.confidence, "Windows ");
     });
     void listen<string>("native-speech-status", (event) => {
       if (asrConfig.provider === "windowsNative") {
-        setVoiceStatus(event.payload, "alert");
+        markNativeSpeechActivity();
+        setVoiceStatus(event.payload, event.payload.startsWith("Windows 正在听：") ? "warm" : "alert");
+      }
+    });
+    void listen<string>("native-speech-state", (event) => {
+      if (asrConfig.provider !== "windowsNative" || voicePausedForAiSpeech) {
+        return;
+      }
+      markNativeSpeechActivity();
+      if (event.payload === "capturing") {
+        setVoiceStatus("Windows 原生识别正在监听麦克风。", "warm");
+      } else if (event.payload === "sound-started" || event.payload === "speech-detected") {
+        setVoiceStatus("Windows 原生识别听到声音了，正在识别...", "warm");
+      } else if (event.payload === "processing") {
+        setVoiceStatus("Windows 原生识别正在处理语音...", "idle");
       }
     });
   }
