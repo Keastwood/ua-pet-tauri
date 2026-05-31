@@ -3422,13 +3422,25 @@ fn get_pet_cursor_position(window: Window) -> Result<WindowPosition, String> {
     let scale_factor = window.scale_factor().map_err(|error| error.to_string())?;
     let window_position = window.outer_position().map_err(|error| error.to_string())?;
     let window_size = window.outer_size().map_err(|error| error.to_string())?;
-    let cursor_position = window
-        .cursor_position()
-        .map_err(|error| error.to_string())?;
     let physical_position = global_cursor_position_physical();
+    let (x, y) = if let Some((physical_x, physical_y)) = physical_position {
+        (
+            (physical_x - f64::from(window_position.x)) / scale_factor,
+            (physical_y - f64::from(window_position.y)) / scale_factor,
+        )
+    } else {
+        let cursor_position = window
+            .cursor_position()
+            .map_err(|error| error.to_string())?;
+        (
+            (cursor_position.x - f64::from(window_position.x)) / scale_factor,
+            (cursor_position.y - f64::from(window_position.y)) / scale_factor,
+        )
+    };
+
     Ok(WindowPosition {
-        x: (cursor_position.x - f64::from(window_position.x)) / scale_factor,
-        y: (cursor_position.y - f64::from(window_position.y)) / scale_factor,
+        x,
+        y,
         window_width: Some(f64::from(window_size.width)),
         physical_x: physical_position.map(|(x, _)| x - f64::from(window_position.x)),
         physical_y: physical_position.map(|(_, y)| y - f64::from(window_position.y)),
