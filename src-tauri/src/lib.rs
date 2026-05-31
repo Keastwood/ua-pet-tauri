@@ -1,12 +1,16 @@
 use base64::{engine::general_purpose, Engine as _};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::{
     env, fs,
     path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter, Manager, Window};
+use tauri::{AppHandle, Emitter, Manager, State, Window};
 #[cfg(not(mobile))]
 use tauri::{
     LogicalPosition, LogicalSize, PhysicalPosition, Position, Size, WebviewUrl,
@@ -20,9 +24,24 @@ const DEFAULT_LLM_TIMEOUT_SECS: u64 = 45;
 const DEFAULT_TTS_TIMEOUT_SECS: u64 = 60;
 const LLM_CONFIG_FILE: &str = "llm_config.json";
 const TTS_CONFIG_FILE: &str = "tts_config.json";
+const MANAGED_GPT_SOVITS_CONFIG_FILE: &str = "managed-gpt-sovits-yua-v2.yaml";
 const INTERACTION_HISTORY_FILE: &str = "interaction_history.json";
 const CUSTOM_SKINS_DIR: &str = "custom_skins";
 const MAX_HISTORY_RECORDS: usize = 240;
+const TTS_PROVIDER_GPT_SOVITS: &str = "gptSovits";
+const TTS_PROVIDER_MANAGED_GPT_SOVITS: &str = "managedGptSovits";
+const TTS_PROVIDER_OPENAI_COMPATIBLE: &str = "openAiCompatible";
+const TTS_PROVIDER_CUSTOM_JSON: &str = "customJson";
+const DEFAULT_MANAGED_GPT_SOVITS_PORT: u16 = 9880;
+const DEFAULT_MANAGED_GPT_SOVITS_ROOT: &str = r"D:\pyprojects\GPT-SoVITS";
+const DEFAULT_YUA_GPT_WEIGHT_REL: &str = "GPT_weights_v2/yua-s-v2-e50.ckpt";
+const DEFAULT_YUA_SOVITS_WEIGHT_REL: &str = "SoVITS_weights_v2/yua-s-v2_e24_s672.pth";
+const DEFAULT_YUA_REF_AUDIO_REL: &str =
+    "logs/yua-s-v2/5-wav32k/ua23102619.mp3_0144998912_0145146368.wav";
+const DEFAULT_YUA_PROMPT_TEXT: &str = "然后再盛两杯小果汁儿.";
+const MANAGED_GPT_SOVITS_STARTUP_TIMEOUT_SECS: u64 = 180;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 #[cfg(not(mobile))]
 const PET_INPUT_SHORTCUT_LABEL: &str = "Ctrl+Alt+Space";
 #[cfg(not(mobile))]
@@ -109,6 +128,11 @@ struct StoredTtsConfig {
     prompt_text: Option<String>,
     speed_factor: Option<f32>,
     timeout_secs: Option<u64>,
+    managed_root: Option<String>,
+    managed_python: Option<String>,
+    managed_port: Option<u16>,
+    gpt_weight_path: Option<String>,
+    sovits_weight_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -128,6 +152,11 @@ struct SaveTtsConfigRequest {
     prompt_text: Option<String>,
     speed_factor: f32,
     timeout_secs: u64,
+    managed_root: Option<String>,
+    managed_python: Option<String>,
+    managed_port: Option<u16>,
+    gpt_weight_path: Option<String>,
+    sovits_weight_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -147,6 +176,27 @@ struct TtsConfigView {
     prompt_text: String,
     speed_factor: f32,
     timeout_secs: u64,
+    managed_root: String,
+    managed_python: String,
+    managed_port: u16,
+    gpt_weight_path: String,
+    sovits_weight_path: String,
+}
+
+#[derive(Default)]
+struct ManagedGptSovitsState {
+    child: Mutex<Option<Child>>,
+}
+
+impl Drop for ManagedGptSovitsState {
+    fn drop(&mut self) {
+        if let Ok(slot) = self.child.get_mut() {
+            if let Some(mut child) = slot.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -502,6 +552,36 @@ fn clean_required(value: &str, field: &str) -> Result<String, String> {
     }
 }
 
+fn default_gpt_sovits_root() -> Option<PathBuf> {
+    read_env(&["GPT_SOVITS_ROOT", "TTS_GPT_SOVITS_ROOT"])
+        .map(PathBuf::from)
+        .filter(|path| path.exists())
+        .or_else(|| {
+            let path = PathBuf::from(DEFAULT_MANAGED_GPT_SOVITS_ROOT);
+            path.exists().then_some(path)
+        })
+}
+
+fn path_to_string(path: &Path) -> String {
+    path.to_string_lossy().to_string()
+}
+
+fn default_managed_child_path(root: &str, relative: &str) -> String {
+    if root.trim().is_empty() {
+        String::new()
+    } else {
+        path_to_string(&PathBuf::from(root).join(relative))
+    }
+}
+
+fn yaml_path(path: &str) -> String {
+    path.trim().replace('\\', "/")
+}
+
+fn managed_gpt_sovits_base_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}")
+}
+
 fn llm_config_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
@@ -791,16 +871,23 @@ fn config_view(config: &StoredLlmConfig) -> LlmConfigView {
 fn normalize_tts_provider(provider: Option<String>) -> String {
     match provider
         .as_deref()
-        .unwrap_or("gptSovits")
+        .unwrap_or(TTS_PROVIDER_GPT_SOVITS)
         .trim()
         .to_ascii_lowercase()
         .as_str()
     {
-        "openai" | "openaicompatible" | "openai-compatible" | "open_ai_compatible" => {
-            "openAiCompatible".to_string()
+        "managed" | "local" | "localgptsovits" | "local-gpt-sovits" | "managedgptsovits"
+        | "managed-gpt-sovits" | "managed_gpt_sovits" => {
+            TTS_PROVIDER_MANAGED_GPT_SOVITS.to_string()
         }
-        "custom" | "customjson" | "custom-json" | "custom_json" => "customJson".to_string(),
-        _ => "gptSovits".to_string(),
+        "gpt" | "gptsovits" | "gpt-sovits" | "gpt_sovits" => TTS_PROVIDER_GPT_SOVITS.to_string(),
+        "openai" | "openaicompatible" | "openai-compatible" | "open_ai_compatible" => {
+            TTS_PROVIDER_OPENAI_COMPATIBLE.to_string()
+        }
+        "custom" | "customjson" | "custom-json" | "custom_json" => {
+            TTS_PROVIDER_CUSTOM_JSON.to_string()
+        }
+        _ => TTS_PROVIDER_GPT_SOVITS.to_string(),
     }
 }
 
@@ -839,7 +926,15 @@ fn content_type_for_audio(media_type: &str) -> String {
 
 fn tts_config_view(config: &StoredTtsConfig) -> TtsConfigView {
     let api_key = clean_optional(config.api_key.clone()).or_else(|| read_env(&["TTS_API_KEY"]));
-    let provider = normalize_tts_provider(config.provider.clone());
+    let provider = clean_optional(config.provider.clone())
+        .map(|provider| normalize_tts_provider(Some(provider)))
+        .unwrap_or_else(|| {
+            if default_gpt_sovits_root().is_some() {
+                TTS_PROVIDER_MANAGED_GPT_SOVITS.to_string()
+            } else {
+                TTS_PROVIDER_GPT_SOVITS.to_string()
+            }
+        });
     let media_type = normalize_tts_media_type(config.media_type.clone());
     let speed_factor = config
         .speed_factor
@@ -850,13 +945,44 @@ fn tts_config_view(config: &StoredTtsConfig) -> TtsConfigView {
         parse_env_u64("TTS_TIMEOUT_SECS", DEFAULT_TTS_TIMEOUT_SECS)
             .unwrap_or(DEFAULT_TTS_TIMEOUT_SECS)
     });
+    let managed_root = clean_optional(config.managed_root.clone())
+        .or_else(|| read_env(&["GPT_SOVITS_ROOT", "TTS_GPT_SOVITS_ROOT"]))
+        .or_else(|| default_gpt_sovits_root().map(|path| path_to_string(&path)))
+        .unwrap_or_default();
+    let managed_python = clean_optional(config.managed_python.clone())
+        .or_else(|| read_env(&["GPT_SOVITS_PYTHON", "TTS_GPT_SOVITS_PYTHON"]))
+        .unwrap_or_else(|| default_managed_child_path(&managed_root, "runtime/python.exe"));
+    let managed_port = config
+        .managed_port
+        .or_else(|| {
+            parse_env_u64("GPT_SOVITS_PORT", DEFAULT_MANAGED_GPT_SOVITS_PORT as u64)
+                .ok()
+                .and_then(|port| u16::try_from(port).ok())
+        })
+        .unwrap_or(DEFAULT_MANAGED_GPT_SOVITS_PORT);
+    let gpt_weight_path = clean_optional(config.gpt_weight_path.clone())
+        .or_else(|| read_env(&["GPT_SOVITS_GPT_WEIGHT", "TTS_GPT_SOVITS_GPT_WEIGHT"]))
+        .unwrap_or_else(|| default_managed_child_path(&managed_root, DEFAULT_YUA_GPT_WEIGHT_REL));
+    let sovits_weight_path = clean_optional(config.sovits_weight_path.clone())
+        .or_else(|| read_env(&["GPT_SOVITS_SOVITS_WEIGHT", "TTS_GPT_SOVITS_SOVITS_WEIGHT"]))
+        .unwrap_or_else(|| {
+            default_managed_child_path(&managed_root, DEFAULT_YUA_SOVITS_WEIGHT_REL)
+        });
+    let ref_audio_path = clean_optional(config.ref_audio_path.clone())
+        .or_else(|| read_env(&["GPT_SOVITS_REF_AUDIO", "TTS_GPT_SOVITS_REF_AUDIO"]))
+        .unwrap_or_else(|| default_managed_child_path(&managed_root, DEFAULT_YUA_REF_AUDIO_REL));
+    let endpoint = if provider == TTS_PROVIDER_MANAGED_GPT_SOVITS {
+        managed_gpt_sovits_base_url(managed_port)
+    } else {
+        clean_optional(config.endpoint.clone())
+            .or_else(|| read_env(&["TTS_ENDPOINT", "GPT_SOVITS_ENDPOINT"]))
+            .unwrap_or_else(|| managed_gpt_sovits_base_url(DEFAULT_MANAGED_GPT_SOVITS_PORT))
+    };
 
     TtsConfigView {
         enabled: config.enabled.unwrap_or(false),
         provider,
-        endpoint: clean_optional(config.endpoint.clone())
-            .or_else(|| read_env(&["TTS_ENDPOINT", "GPT_SOVITS_ENDPOINT"]))
-            .unwrap_or_else(|| "http://127.0.0.1:9880".to_string()),
+        endpoint,
         has_api_key: api_key.is_some(),
         masked_api_key: api_key.as_deref().map(mask_api_key),
         model: clean_optional(config.model.clone())
@@ -867,23 +993,29 @@ fn tts_config_view(config: &StoredTtsConfig) -> TtsConfigView {
             .unwrap_or_else(|| "alloy".to_string()),
         media_type,
         text_lang: clean_optional(config.text_lang.clone()).unwrap_or_else(|| "zh".to_string()),
-        ref_audio_path: clean_optional(config.ref_audio_path.clone()).unwrap_or_default(),
+        ref_audio_path,
         prompt_lang: clean_optional(config.prompt_lang.clone()).unwrap_or_else(|| "zh".to_string()),
-        prompt_text: clean_optional(config.prompt_text.clone()).unwrap_or_default(),
+        prompt_text: clean_optional(config.prompt_text.clone())
+            .unwrap_or_else(|| DEFAULT_YUA_PROMPT_TEXT.to_string()),
         speed_factor,
         timeout_secs: timeout_secs.clamp(5, 300),
+        managed_root,
+        managed_python,
+        managed_port,
+        gpt_weight_path,
+        sovits_weight_path,
     }
 }
 
 fn tts_endpoint_url(provider: &str, endpoint: &str) -> String {
     let trimmed = endpoint.trim().trim_end_matches('/');
-    if provider == "gptSovits" {
+    if provider == TTS_PROVIDER_GPT_SOVITS || provider == TTS_PROVIDER_MANAGED_GPT_SOVITS {
         if trimmed.ends_with("/tts") {
             trimmed.to_string()
         } else {
             format!("{trimmed}/tts")
         }
-    } else if provider == "openAiCompatible" {
+    } else if provider == TTS_PROVIDER_OPENAI_COMPATIBLE {
         if trimmed.ends_with("/audio/speech") {
             trimmed.to_string()
         } else if trimmed.ends_with("/v1") {
@@ -894,6 +1026,200 @@ fn tts_endpoint_url(provider: &str, endpoint: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+fn managed_gpt_sovits_config_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| format!("获取应用配置目录失败：{error}"))?;
+    fs::create_dir_all(&dir).map_err(|error| format!("创建应用配置目录失败：{error}"))?;
+    Ok(dir.join(MANAGED_GPT_SOVITS_CONFIG_FILE))
+}
+
+fn write_managed_gpt_sovits_config(
+    app: &AppHandle,
+    config: &TtsConfigView,
+) -> Result<PathBuf, String> {
+    let root = PathBuf::from(&config.managed_root);
+    let bert_path = root.join("GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large");
+    let hubert_path = root.join("GPT_SoVITS/pretrained_models/chinese-hubert-base");
+    let yaml = format!(
+        "custom:\n  bert_base_path: {}\n  cnhuhbert_base_path: {}\n  device: cuda\n  is_half: true\n  t2s_weights_path: {}\n  version: v2\n  vits_weights_path: {}\n",
+        yaml_path(&path_to_string(&bert_path)),
+        yaml_path(&path_to_string(&hubert_path)),
+        yaml_path(&config.gpt_weight_path),
+        yaml_path(&config.sovits_weight_path),
+    );
+    let path = managed_gpt_sovits_config_path(app)?;
+    fs::write(&path, yaml).map_err(|error| format!("写入 GPT-SoVITS 托管配置失败：{error}"))?;
+    Ok(path)
+}
+
+fn validate_existing_file(path: &str, label: &str) -> Result<(), String> {
+    let path = Path::new(path);
+    if !path.is_file() {
+        return Err(format!("{label}不存在：{}", path.display()));
+    }
+    Ok(())
+}
+
+fn validate_existing_dir(path: &str, label: &str) -> Result<(), String> {
+    let path = Path::new(path);
+    if !path.is_dir() {
+        return Err(format!("{label}不存在：{}", path.display()));
+    }
+    Ok(())
+}
+
+async fn managed_gpt_sovits_is_ready(client: &reqwest::Client, port: u16) -> bool {
+    let url = format!("{}/docs", managed_gpt_sovits_base_url(port));
+    client
+        .get(url)
+        .send()
+        .await
+        .map(|response| response.status().is_success())
+        .unwrap_or(false)
+}
+
+fn start_managed_gpt_sovits(
+    app: &AppHandle,
+    state: &ManagedGptSovitsState,
+    config: &TtsConfigView,
+) -> Result<u32, String> {
+    validate_existing_dir(&config.managed_root, "GPT-SoVITS 根目录")?;
+    validate_existing_file(&config.managed_python, "GPT-SoVITS Python")?;
+    validate_existing_file(&config.gpt_weight_path, "GPT 权重")?;
+    validate_existing_file(&config.sovits_weight_path, "SoVITS 权重")?;
+
+    let root = PathBuf::from(&config.managed_root);
+    let api_path = root.join("api_v2.py");
+    if !api_path.is_file() {
+        return Err(format!(
+            "GPT-SoVITS api_v2.py 不存在：{}",
+            api_path.display()
+        ));
+    }
+
+    let config_path = write_managed_gpt_sovits_config(app, config)?;
+    let log_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| format!("获取应用配置目录失败：{error}"))?;
+    fs::create_dir_all(&log_dir).map_err(|error| format!("创建应用配置目录失败：{error}"))?;
+    let stdout_path = log_dir.join("managed-gpt-sovits-api.out.log");
+    let stderr_path = log_dir.join("managed-gpt-sovits-api.err.log");
+    let stdout = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&stdout_path)
+        .map_err(|error| format!("打开 GPT-SoVITS stdout 日志失败：{error}"))?;
+    let stderr = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&stderr_path)
+        .map_err(|error| format!("打开 GPT-SoVITS stderr 日志失败：{error}"))?;
+
+    let runtime_dir = root.join("runtime");
+    let scripts_dir = runtime_dir.join("Scripts");
+    let existing_path = env::var_os("PATH").unwrap_or_default();
+    let mut path_entries = vec![runtime_dir, scripts_dir];
+    path_entries.extend(env::split_paths(&existing_path));
+    let child_path = env::join_paths(path_entries)
+        .map_err(|error| format!("拼接 GPT-SoVITS PATH 失败：{error}"))?;
+
+    let mut command = Command::new(&config.managed_python);
+    command
+        .arg("api_v2.py")
+        .arg("-a")
+        .arg("127.0.0.1")
+        .arg("-p")
+        .arg(config.managed_port.to_string())
+        .arg("-c")
+        .arg(&config_path)
+        .current_dir(&root)
+        .env("PATH", child_path)
+        .env("PYTHONNOUSERSITE", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let child = command
+        .spawn()
+        .map_err(|error| format!("启动 GPT-SoVITS 失败：{error}"))?;
+    let pid = child.id();
+    let mut slot = state
+        .child
+        .lock()
+        .map_err(|_| "GPT-SoVITS 进程状态锁已损坏。".to_string())?;
+    *slot = Some(child);
+    Ok(pid)
+}
+
+async fn ensure_managed_gpt_sovits(
+    app: &AppHandle,
+    state: &ManagedGptSovitsState,
+    config: &TtsConfigView,
+) -> Result<(), String> {
+    let health_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .map_err(|error| format!("创建 GPT-SoVITS 健康检查客户端失败：{error}"))?;
+    if managed_gpt_sovits_is_ready(&health_client, config.managed_port).await {
+        return Ok(());
+    }
+
+    let mut needs_start = false;
+    {
+        let mut slot = state
+            .child
+            .lock()
+            .map_err(|_| "GPT-SoVITS 进程状态锁已损坏。".to_string())?;
+        match slot.as_mut() {
+            Some(child) => {
+                if let Some(status) = child
+                    .try_wait()
+                    .map_err(|error| format!("检查 GPT-SoVITS 进程失败：{error}"))?
+                {
+                    *slot = None;
+                    return Err(format!("GPT-SoVITS 已退出，状态：{status}。"));
+                }
+            }
+            None => needs_start = true,
+        }
+    }
+
+    if needs_start {
+        let _pid = start_managed_gpt_sovits(app, state, config)?;
+    }
+
+    let attempts = MANAGED_GPT_SOVITS_STARTUP_TIMEOUT_SECS / 2;
+    for _ in 0..attempts {
+        if managed_gpt_sovits_is_ready(&health_client, config.managed_port).await {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let mut slot = state
+            .child
+            .lock()
+            .map_err(|_| "GPT-SoVITS 进程状态锁已损坏。".to_string())?;
+        if let Some(child) = slot.as_mut() {
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|error| format!("检查 GPT-SoVITS 进程失败：{error}"))?
+            {
+                *slot = None;
+                return Err(format!("GPT-SoVITS 启动后已退出，状态：{status}。"));
+            }
+        }
+    }
+
+    Err(format!(
+        "GPT-SoVITS 在 {} 秒内未就绪，请查看应用配置目录下的 managed-gpt-sovits-api.err.log。",
+        MANAGED_GPT_SOVITS_STARTUP_TIMEOUT_SECS
+    ))
 }
 
 fn effective_llm_config(
@@ -1157,7 +1483,9 @@ fn validate_llm_request(request: &LlmChatRequest) -> Result<(), String> {
 }
 
 fn validate_tts_config(config: &TtsConfigView) -> Result<(), String> {
-    if !(config.endpoint.starts_with("https://") || config.endpoint.starts_with("http://")) {
+    if config.provider != TTS_PROVIDER_MANAGED_GPT_SOVITS
+        && !(config.endpoint.starts_with("https://") || config.endpoint.starts_with("http://"))
+    {
         return Err("语音服务地址需要以 http:// 或 https:// 开头。".to_string());
     }
 
@@ -1169,7 +1497,10 @@ fn validate_tts_config(config: &TtsConfigView) -> Result<(), String> {
         return Err("语速需要在 0.5 到 2.0 之间。".to_string());
     }
 
-    if config.enabled && config.provider == "gptSovits" {
+    if config.enabled
+        && (config.provider == TTS_PROVIDER_GPT_SOVITS
+            || config.provider == TTS_PROVIDER_MANAGED_GPT_SOVITS)
+    {
         if config.ref_audio_path.trim().is_empty() {
             return Err("GPT-SoVITS 需要填写参考音频路径。".to_string());
         }
@@ -1178,8 +1509,19 @@ fn validate_tts_config(config: &TtsConfigView) -> Result<(), String> {
         }
     }
 
+    if config.enabled && config.provider == TTS_PROVIDER_MANAGED_GPT_SOVITS {
+        if config.managed_port == 0 {
+            return Err("GPT-SoVITS 本地端口需要在 1 到 65535 之间。".to_string());
+        }
+        validate_existing_dir(&config.managed_root, "GPT-SoVITS 根目录")?;
+        validate_existing_file(&config.managed_python, "GPT-SoVITS Python")?;
+        validate_existing_file(&config.gpt_weight_path, "GPT 权重")?;
+        validate_existing_file(&config.sovits_weight_path, "SoVITS 权重")?;
+        validate_existing_file(&config.ref_audio_path, "GPT-SoVITS 参考音频")?;
+    }
+
     if config.enabled
-        && config.provider == "openAiCompatible"
+        && config.provider == TTS_PROVIDER_OPENAI_COMPATIBLE
         && (config.model.trim().is_empty() || config.voice.trim().is_empty())
     {
         return Err("OpenAI 兼容语音需要填写模型和音色。".to_string());
@@ -1198,8 +1540,19 @@ fn get_tts_config(app: AppHandle) -> Result<TtsConfigView, String> {
 fn save_tts_config(app: AppHandle, request: SaveTtsConfigRequest) -> Result<TtsConfigView, String> {
     let mut stored = load_stored_tts_config(&app)?;
     stored.enabled = Some(request.enabled);
-    stored.provider = Some(normalize_tts_provider(Some(request.provider)));
-    stored.endpoint = Some(clean_required(&request.endpoint, "语音服务地址")?);
+    let provider = normalize_tts_provider(Some(request.provider));
+    stored.provider = Some(provider.clone());
+    stored.endpoint = if provider == TTS_PROVIDER_MANAGED_GPT_SOVITS {
+        clean_optional(Some(request.endpoint))
+            .or_else(|| {
+                request
+                    .managed_port
+                    .map(|port| managed_gpt_sovits_base_url(port))
+            })
+            .or_else(|| Some(managed_gpt_sovits_base_url(DEFAULT_MANAGED_GPT_SOVITS_PORT)))
+    } else {
+        Some(clean_required(&request.endpoint, "语音服务地址")?)
+    };
     stored.model = clean_optional(request.model);
     stored.voice = clean_optional(request.voice);
     stored.media_type = Some(normalize_tts_media_type(Some(request.media_type)));
@@ -1209,6 +1562,11 @@ fn save_tts_config(app: AppHandle, request: SaveTtsConfigRequest) -> Result<TtsC
     stored.prompt_text = clean_optional(request.prompt_text);
     stored.speed_factor = Some(request.speed_factor.clamp(0.5, 2.0));
     stored.timeout_secs = Some(request.timeout_secs.clamp(5, 300));
+    stored.managed_root = clean_optional(request.managed_root);
+    stored.managed_python = clean_optional(request.managed_python);
+    stored.managed_port = request.managed_port;
+    stored.gpt_weight_path = clean_optional(request.gpt_weight_path);
+    stored.sovits_weight_path = clean_optional(request.sovits_weight_path);
 
     if request.clear_api_key {
         stored.api_key = None;
@@ -1226,6 +1584,7 @@ fn save_tts_config(app: AppHandle, request: SaveTtsConfigRequest) -> Result<TtsC
 #[tauri::command]
 async fn synthesize_speech(
     app: AppHandle,
+    managed_tts: State<'_, ManagedGptSovitsState>,
     request: TtsSynthesisRequest,
 ) -> Result<TtsSynthesisResponse, String> {
     let text = request.text.trim();
@@ -1237,6 +1596,10 @@ async fn synthesize_speech(
     let mut config = tts_config_view(&stored);
     config.enabled = true;
     validate_tts_config(&config)?;
+    if config.provider == TTS_PROVIDER_MANAGED_GPT_SOVITS {
+        ensure_managed_gpt_sovits(&app, managed_tts.inner(), &config).await?;
+        config.endpoint = managed_gpt_sovits_base_url(config.managed_port);
+    }
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(config.timeout_secs))
@@ -1251,7 +1614,7 @@ async fn synthesize_speech(
     }
 
     let response = match config.provider.as_str() {
-        "gptSovits" => {
+        TTS_PROVIDER_GPT_SOVITS | TTS_PROVIDER_MANAGED_GPT_SOVITS => {
             let payload = GptSovitsTtsRequest {
                 text,
                 text_lang: &config.text_lang,
@@ -1269,7 +1632,7 @@ async fn synthesize_speech(
             };
             request_builder.json(&payload).send().await
         }
-        "openAiCompatible" => {
+        TTS_PROVIDER_OPENAI_COMPATIBLE => {
             let payload = OpenAiCompatibleSpeechRequest {
                 model: &config.model,
                 voice: &config.voice,
@@ -2285,6 +2648,7 @@ pub fn run() {
         });
 
     builder
+        .manage(ManagedGptSovitsState::default())
         .invoke_handler(tauri::generate_handler![
             clear_interaction_history,
             delete_custom_skin,

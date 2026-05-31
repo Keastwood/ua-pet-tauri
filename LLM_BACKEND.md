@@ -75,6 +75,7 @@ The desktop pet can synthesize spoken replies after local or LLM interactions. R
 
 Supported providers:
 
+- `Managed local GPT-SoVITS`: the backend stores a GPT-SoVITS root, runtime Python path, local port, GPT weight path, SoVITS weight path, reference audio path, reference text, and language settings. On synthesis it first checks `http://127.0.0.1:<port>/docs`; if the service is not ready, it writes a generated v2 inference YAML in the app config directory and starts `api_v2.py` itself. The current default targets the local yua v2 model under `D:\pyprojects\GPT-SoVITS`.
 - `GPT-SoVITS api_v2`: configure a server base URL such as `http://127.0.0.1:9880`. The backend posts to `/tts` with `text`, `text_lang`, `ref_audio_path`, `prompt_lang`, `prompt_text`, `media_type`, `speed_factor`, and non-streaming inference flags.
 - `OpenAI compatible /audio/speech`: configure a base URL or full `/audio/speech` URL, model, voice, optional API key, output format, and speed.
 - `Custom JSON audio endpoint`: posts `text`, `input`, optional `model`, optional `voice`, `format`, `mediaType`, and `speed` to the exact endpoint, expecting an audio response body.

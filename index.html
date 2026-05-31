@@ -137,6 +137,7 @@
                 <label class="settings-field">
                   <span>语音服务</span>
                   <select id="tts-provider-select" class="skin-importer__select">
+                    <option value="managedGptSovits">本地 GPT-SoVITS（自动启动）</option>
                     <option value="gptSovits">GPT-SoVITS api_v2</option>
                     <option value="openAiCompatible">OpenAI 兼容 /audio/speech</option>
                     <option value="customJson">自定义 JSON 音频端点</option>
@@ -146,6 +147,32 @@
                 <label class="settings-field">
                   <span>服务地址</span>
                   <input id="tts-endpoint-input" type="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:9880" />
+                </label>
+
+                <div class="settings-grid settings-grid--two" data-tts-managed-field>
+                  <label class="settings-field">
+                    <span>GPT-SoVITS 根目录</span>
+                    <input id="tts-managed-root-input" type="text" autocomplete="off" spellcheck="false" placeholder="D:\pyprojects\GPT-SoVITS" />
+                  </label>
+                  <label class="settings-field">
+                    <span>本地端口</span>
+                    <input id="tts-managed-port-input" type="number" min="1" max="65535" step="1" value="9880" />
+                  </label>
+                </div>
+
+                <label class="settings-field" data-tts-managed-field>
+                  <span>Python 路径</span>
+                  <input id="tts-managed-python-input" type="text" autocomplete="off" spellcheck="false" placeholder="D:\pyprojects\GPT-SoVITS\runtime\python.exe" />
+                </label>
+
+                <label class="settings-field" data-tts-managed-field>
+                  <span>GPT 权重</span>
+                  <input id="tts-gpt-weight-path-input" type="text" autocomplete="off" spellcheck="false" placeholder="GPT_weights_v2\yua-s-v2-e50.ckpt" />
+                </label>
+
+                <label class="settings-field" data-tts-managed-field>
+                  <span>SoVITS 权重</span>
+                  <input id="tts-sovits-weight-path-input" type="text" autocomplete="off" spellcheck="false" placeholder="SoVITS_weights_v2\yua-s-v2_e24_s672.pth" />
                 </label>
 
                 <div class="settings-grid settings-grid--two">

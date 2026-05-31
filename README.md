@@ -56,7 +56,7 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 ## AI 语音
 
-右键桌宠打开设置页，在“语音”标签里配置 AI 发声。GPT-SoVITS 推荐启动 `api_v2.py` 后填写 `http://127.0.0.1:9880`，并配置服务端可访问的参考音频路径、参考文本和语言；程序会调用 `/tts` 合成音频。其他服务可以选择 OpenAI 兼容 `/audio/speech` 或自定义 JSON 音频端点。
+右键桌宠打开设置页，在“语音”标签里配置 AI 发声。默认优先使用“本地 GPT-SoVITS（自动启动）”：程序会保存 GPT-SoVITS 根目录、运行时 Python、yua GPT/SoVITS 权重、参考音频和端口，并在需要发声时自动启动本地 `api_v2.py`。也可以改用已手动启动的 GPT-SoVITS api_v2、OpenAI 兼容 `/audio/speech` 或自定义 JSON 音频端点。
 
 ## 主要目录
 

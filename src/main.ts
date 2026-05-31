@@ -96,7 +96,7 @@ interface LlmConfigView {
 
 interface TtsConfigView {
   enabled: boolean;
-  provider: "gptSovits" | "openAiCompatible" | "customJson";
+  provider: "managedGptSovits" | "gptSovits" | "openAiCompatible" | "customJson";
   endpoint: string;
   hasApiKey: boolean;
   maskedApiKey?: string;
@@ -109,6 +109,11 @@ interface TtsConfigView {
   promptText: string;
   speedFactor: number;
   timeoutSecs: number;
+  managedRoot: string;
+  managedPython: string;
+  managedPort: number;
+  gptWeightPath: string;
+  sovitsWeightPath: string;
 }
 
 interface TtsSynthesisResponse {
@@ -1078,6 +1083,12 @@ window.addEventListener("DOMContentLoaded", () => {
   const ttsEnabledInput = must<HTMLInputElement>("#tts-enabled-input");
   const ttsProviderSelect = must<HTMLSelectElement>("#tts-provider-select");
   const ttsEndpointInput = must<HTMLInputElement>("#tts-endpoint-input");
+  const ttsManagedRootInput = must<HTMLInputElement>("#tts-managed-root-input");
+  const ttsManagedPythonInput = must<HTMLInputElement>("#tts-managed-python-input");
+  const ttsManagedPortInput = must<HTMLInputElement>("#tts-managed-port-input");
+  const ttsGptWeightPathInput = must<HTMLInputElement>("#tts-gpt-weight-path-input");
+  const ttsSovitsWeightPathInput = must<HTMLInputElement>("#tts-sovits-weight-path-input");
+  const ttsManagedFieldEls = Array.from(document.querySelectorAll<HTMLElement>("[data-tts-managed-field]"));
   const ttsApiKeyInput = must<HTMLInputElement>("#tts-api-key-input");
   const ttsClearKeyInput = must<HTMLInputElement>("#tts-clear-key-input");
   const ttsModelInput = must<HTMLInputElement>("#tts-model-input");
@@ -2453,6 +2464,19 @@ window.addEventListener("DOMContentLoaded", () => {
     return Math.min(2, Math.max(0.5, Math.round(value * 100) / 100));
   }
 
+  function ttsManagedEndpointFromPort(): string {
+    const port = clampTtsPort(Number(ttsManagedPortInput.value));
+    return `http://127.0.0.1:${port}`;
+  }
+
+  function clampTtsPort(value: number): number {
+    if (!Number.isFinite(value)) {
+      return 9880;
+    }
+
+    return Math.min(65535, Math.max(1, Math.round(value)));
+  }
+
   function applyTtsConfig(config: TtsConfigView): void {
     ttsPlaybackEnabled = config.enabled;
     if (!config.enabled) {
@@ -2461,6 +2485,11 @@ window.addEventListener("DOMContentLoaded", () => {
     ttsEnabledInput.checked = config.enabled;
     ttsProviderSelect.value = config.provider;
     ttsEndpointInput.value = config.endpoint || "http://127.0.0.1:9880";
+    ttsManagedRootInput.value = config.managedRoot ?? "";
+    ttsManagedPythonInput.value = config.managedPython ?? "";
+    ttsManagedPortInput.value = String(config.managedPort || 9880);
+    ttsGptWeightPathInput.value = config.gptWeightPath ?? "";
+    ttsSovitsWeightPathInput.value = config.sovitsWeightPath ?? "";
     ttsApiKeyInput.value = "";
     ttsApiKeyInput.placeholder = config.hasApiKey
       ? `已保存：${config.maskedApiKey ?? "••••"}（留空则保留）`
@@ -2481,15 +2510,29 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function syncTtsProviderFields(): void {
     const provider = ttsProviderSelect.value;
-    const isGptSovits = provider === "gptSovits";
+    const isManagedGptSovits = provider === "managedGptSovits";
+    const isGptSovits = provider === "gptSovits" || isManagedGptSovits;
     ttsTextLangInput.disabled = !isGptSovits;
     ttsRefAudioPathInput.disabled = !isGptSovits;
     ttsPromptLangInput.disabled = !isGptSovits;
     ttsPromptTextInput.disabled = !isGptSovits;
-    ttsModelInput.disabled = provider === "gptSovits";
-    ttsVoiceInput.disabled = provider === "gptSovits";
+    ttsManagedRootInput.disabled = !isManagedGptSovits;
+    ttsManagedPythonInput.disabled = !isManagedGptSovits;
+    ttsManagedPortInput.disabled = !isManagedGptSovits;
+    ttsGptWeightPathInput.disabled = !isManagedGptSovits;
+    ttsSovitsWeightPathInput.disabled = !isManagedGptSovits;
+    ttsManagedFieldEls.forEach((element) => {
+      element.hidden = !isManagedGptSovits;
+    });
+    ttsEndpointInput.disabled = isManagedGptSovits;
+    ttsApiKeyInput.disabled = isManagedGptSovits;
+    ttsClearKeyInput.disabled = isManagedGptSovits;
+    ttsModelInput.disabled = isGptSovits;
+    ttsVoiceInput.disabled = isGptSovits;
 
-    if (isGptSovits && !ttsEndpointInput.value.trim()) {
+    if (isManagedGptSovits) {
+      ttsEndpointInput.value = ttsManagedEndpointFromPort();
+    } else if (isGptSovits && !ttsEndpointInput.value.trim()) {
       ttsEndpointInput.value = "http://127.0.0.1:9880";
     } else if (provider === "openAiCompatible" && !ttsEndpointInput.value.trim()) {
       ttsEndpointInput.value = "https://api.openai.com/v1";
@@ -2513,10 +2556,12 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function collectTtsConfigRequest(): Record<string, unknown> {
+    const isManagedGptSovits = ttsProviderSelect.value === "managedGptSovits";
+    const managedPort = clampTtsPort(Number(ttsManagedPortInput.value));
     return {
       enabled: ttsEnabledInput.checked,
       provider: ttsProviderSelect.value,
-      endpoint: ttsEndpointInput.value.trim(),
+      endpoint: isManagedGptSovits ? `http://127.0.0.1:${managedPort}` : ttsEndpointInput.value.trim(),
       apiKey: ttsApiKeyInput.value.trim() || null,
       clearApiKey: ttsClearKeyInput.checked,
       model: ttsModelInput.value.trim() || null,
@@ -2528,6 +2573,11 @@ window.addEventListener("DOMContentLoaded", () => {
       promptText: ttsPromptTextInput.value.trim() || null,
       speedFactor: clampTtsSpeed(Number(ttsSpeedInput.value)),
       timeoutSecs: clampTtsTimeoutSeconds(Number(ttsTimeoutInput.value)),
+      managedRoot: ttsManagedRootInput.value.trim() || null,
+      managedPython: ttsManagedPythonInput.value.trim() || null,
+      managedPort,
+      gptWeightPath: ttsGptWeightPathInput.value.trim() || null,
+      sovitsWeightPath: ttsSovitsWeightPathInput.value.trim() || null,
     };
   }
 
@@ -4368,6 +4418,12 @@ window.addEventListener("DOMContentLoaded", () => {
 
   ttsProviderSelect.addEventListener("change", () => {
     syncTtsProviderFields();
+  });
+
+  ttsManagedPortInput.addEventListener("input", () => {
+    if (ttsProviderSelect.value === "managedGptSovits") {
+      ttsEndpointInput.value = ttsManagedEndpointFromPort();
+    }
   });
 
   ttsSpeedInput.addEventListener("input", () => {
