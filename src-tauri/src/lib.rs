@@ -12,7 +12,11 @@ use std::{
     sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter, Manager, State, Window};
+use tauri::{
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    App, AppHandle, Emitter, Manager, State, Window,
+};
 #[cfg(not(mobile))]
 use tauri::{
     LogicalPosition, LogicalSize, PhysicalPosition, Position, Size, WebviewUrl,
@@ -71,14 +75,9 @@ const TTS_ASSET_SCAN_LIMIT_PER_KIND: usize = 500;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 #[cfg(not(mobile))]
 const PET_INPUT_SHORTCUT_LABEL: &str = "Ctrl+Alt+Space";
+const SETTINGS_WINDOW_WIDTH: f64 = 980.0;
 #[cfg(not(mobile))]
-const SETTINGS_MENU_WIDTH: f64 = 430.0;
-#[cfg(not(mobile))]
-const SETTINGS_MENU_HEIGHT: f64 = 720.0;
-#[cfg(not(mobile))]
-const SETTINGS_MENU_ANCHOR_GAP: f64 = 8.0;
-#[cfg(not(mobile))]
-const SETTINGS_MENU_WINDOW_EDGE_ALLOWANCE: f64 = 80.0;
+const SETTINGS_WINDOW_HEIGHT: f64 = 760.0;
 const DEFAULT_PET_INTERACTION_SYSTEM_PROMPT: &str = "你是银白发桌宠，正在和用户互动。用户会先选择一个交互控件，例如手指、手掌、嘴、脚、羽毛、梳子或零食，再点击桌宠的具体部位。请参考控件、部位、坐标和最近交互历史，用中文给出一句自然、温柔、俏皮的桌宠回应。回复不超过 42 个汉字，不要解释，不要加引号。";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -344,6 +343,9 @@ struct AsrConfigView {
     prompt: String,
     timeout_secs: u64,
     default_prompt: String,
+    native_speech_available: bool,
+    native_speech_filter_configurable: bool,
+    browser_speech_filter_configurable: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -397,7 +399,6 @@ struct WinPoint {
 #[link(name = "user32")]
 extern "system" {
     fn GetCursorPos(point: *mut WinPoint) -> i32;
-    fn GetSystemMetrics(index: i32) -> i32;
 }
 
 #[cfg(all(not(mobile), target_os = "windows"))]
@@ -413,34 +414,6 @@ fn global_cursor_position_physical() -> Option<(f64, f64)> {
 
 #[cfg(all(not(mobile), not(target_os = "windows")))]
 fn global_cursor_position_physical() -> Option<(f64, f64)> {
-    None
-}
-
-#[cfg(all(not(mobile), target_os = "windows"))]
-fn virtual_screen_bounds() -> Option<(f64, f64, f64, f64)> {
-    const SM_XVIRTUALSCREEN: i32 = 76;
-    const SM_YVIRTUALSCREEN: i32 = 77;
-    const SM_CXVIRTUALSCREEN: i32 = 78;
-    const SM_CYVIRTUALSCREEN: i32 = 79;
-
-    let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
-    let top = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
-    let width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
-    let height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
-    if width <= 0 || height <= 0 {
-        None
-    } else {
-        Some((
-            f64::from(left),
-            f64::from(top),
-            f64::from(left + width),
-            f64::from(top + height),
-        ))
-    }
-}
-
-#[cfg(all(not(mobile), not(target_os = "windows")))]
-fn virtual_screen_bounds() -> Option<(f64, f64, f64, f64)> {
     None
 }
 
@@ -1396,7 +1369,13 @@ fn normalize_asr_provider(provider: Option<String>) -> String {
         .as_str()
     {
         "windows" | "native" | "windowsnative" | "windows-native" | "windows_native" | "system"
-        | "systemdictation" | "system-dictation" => ASR_PROVIDER_WINDOWS_NATIVE.to_string(),
+        | "systemdictation" | "system-dictation" => {
+            if cfg!(windows) {
+                ASR_PROVIDER_WINDOWS_NATIVE.to_string()
+            } else {
+                ASR_PROVIDER_BROWSER.to_string()
+            }
+        }
         "openai" | "openaicompatible" | "openai-compatible" | "open_ai_compatible" | "whisper" => {
             ASR_PROVIDER_OPENAI_COMPATIBLE.to_string()
         }
@@ -1435,6 +1414,9 @@ fn asr_config_view(config: &StoredAsrConfig) -> AsrConfigView {
         prompt,
         timeout_secs,
         default_prompt: DEFAULT_ASR_PROMPT.to_string(),
+        native_speech_available: cfg!(windows),
+        native_speech_filter_configurable: false,
+        browser_speech_filter_configurable: false,
     }
 }
 
@@ -3540,7 +3522,7 @@ fn close_current_window(_window: Window) -> Result<(), String> {
 fn close_pet(app: AppHandle) -> Result<(), String> {
     let mut close_error = None;
 
-    for label in ["mask-editor", "settings-menu", "main"] {
+    for label in ["mask-editor", "settings", "settings-menu", "main"] {
         if let Some(window) = app.get_webview_window(label) {
             if let Err(error) = window.close() {
                 close_error.get_or_insert_with(|| format!("关闭窗口 {label} 失败：{error}"));
@@ -3582,15 +3564,99 @@ fn mask_editor_url() -> Result<WebviewUrl, String> {
 }
 
 #[cfg(not(mobile))]
-fn settings_menu_url() -> Result<WebviewUrl, String> {
+fn settings_window_url() -> Result<WebviewUrl, String> {
     if cfg!(debug_assertions) {
-        "http://localhost:1420/?view=settings-menu"
+        "http://localhost:1420/?view=settings"
             .parse()
             .map(WebviewUrl::External)
-            .map_err(|error| format!("invalid settings menu dev url: {error}"))
+            .map_err(|error| format!("invalid settings window dev url: {error}"))
     } else {
-        Ok(WebviewUrl::App("index.html?view=settings-menu".into()))
+        Ok(WebviewUrl::App("index.html?view=settings".into()))
     }
+}
+
+#[cfg(not(mobile))]
+fn show_pet_window(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        window.show().map_err(|error| error.to_string())?;
+        let _ = window.unminimize();
+        window.set_focus().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[cfg(not(mobile))]
+fn show_settings_window(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app
+        .get_webview_window("settings")
+        .or_else(|| app.get_webview_window("settings-menu"))
+    {
+        window.show().map_err(|error| error.to_string())?;
+        let _ = window.unminimize();
+        return window.set_focus().map_err(|error| error.to_string());
+    }
+
+    let window = WebviewWindowBuilder::new(app, "settings", settings_window_url()?)
+        .title("Silver Pet Settings")
+        .inner_size(SETTINGS_WINDOW_WIDTH, SETTINGS_WINDOW_HEIGHT)
+        .min_inner_size(760.0, 620.0)
+        .resizable(true)
+        .decorations(true)
+        .transparent(false)
+        .always_on_top(false)
+        .skip_taskbar(false)
+        .visible(true)
+        .build()
+        .map_err(|error| error.to_string())?;
+
+    window.set_focus().map_err(|error| error.to_string())
+}
+
+#[cfg(not(mobile))]
+fn setup_tray(app: &App) -> tauri::Result<()> {
+    let show_pet = MenuItem::with_id(app, "show-pet", "显示桌宠", true, None::<&str>)?;
+    let open_settings = MenuItem::with_id(app, "open-settings", "打开设置", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let menu = Menu::with_items(app, &[&show_pet, &open_settings, &separator, &quit])?;
+
+    let mut tray = TrayIconBuilder::with_id("silver-pet-tray")
+        .menu(&menu)
+        .tooltip("Silver Pet")
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "show-pet" => {
+                if let Err(error) = show_pet_window(app) {
+                    eprintln!("failed to show pet from tray: {error}");
+                }
+            }
+            "open-settings" => {
+                if let Err(error) = show_settings_window(app) {
+                    eprintln!("failed to open settings from tray: {error}");
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                if let Err(error) = show_pet_window(tray.app_handle()) {
+                    eprintln!("failed to show pet from tray click: {error}");
+                }
+            }
+        });
+
+    if let Some(icon) = app.default_window_icon().cloned() {
+        tray = tray.icon(icon);
+    }
+
+    tray.build(app)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -3619,123 +3685,14 @@ async fn open_mask_editor(_app: AppHandle) -> Result<(), String> {
     Err("移动端暂不支持独立蒙版编辑器。".to_string())
 }
 
-#[cfg(not(mobile))]
-fn settings_menu_position(
-    app: &AppHandle,
-    anchor: Option<(f64, f64)>,
-    menu_size: Option<(f64, f64)>,
-) -> Option<PhysicalPosition<i32>> {
-    // Position the menu like a native context menu: start from the click point,
-    // then flip left/up when the virtual desktop edge would clip the window.
-    let (anchor_x, anchor_y) = anchor.or_else(global_cursor_position_physical)?;
-    let monitors = app.available_monitors().ok()?;
-    let monitor_scale_factor = monitors
-        .iter()
-        .find(|monitor| {
-            let position = monitor.position();
-            let size = monitor.size();
-            let left = f64::from(position.x);
-            let top = f64::from(position.y);
-            let right = left + f64::from(size.width);
-            let bottom = top + f64::from(size.height);
-            anchor_x >= left && anchor_x <= right && anchor_y >= top && anchor_y <= bottom
-        })
-        .map(|monitor| monitor.scale_factor())
-        .or_else(|| monitors.first().map(|monitor| monitor.scale_factor()))?;
-
-    let (min_x, min_y, right, bottom) = virtual_screen_bounds().unwrap_or_else(|| {
-        let mut min_x = f64::INFINITY;
-        let mut min_y = f64::INFINITY;
-        let mut right = f64::NEG_INFINITY;
-        let mut bottom = f64::NEG_INFINITY;
-        for monitor in &monitors {
-            let position = monitor.position();
-            let size = monitor.size();
-            let left = f64::from(position.x);
-            let top = f64::from(position.y);
-            min_x = min_x.min(left);
-            min_y = min_y.min(top);
-            right = right.max(left + f64::from(size.width));
-            bottom = bottom.max(top + f64::from(size.height));
-        }
-
-        (min_x, min_y, right, bottom)
-    });
-
-    if !min_x.is_finite() || !min_y.is_finite() || !right.is_finite() || !bottom.is_finite() {
-        return None;
-    }
-
-    let (menu_width, menu_height) = menu_size.unwrap_or_else(|| {
-        (
-            (SETTINGS_MENU_WIDTH * monitor_scale_factor).round(),
-            (SETTINGS_MENU_HEIGHT * monitor_scale_factor).round(),
-        )
-    });
-    let menu_width = menu_width + SETTINGS_MENU_WINDOW_EDGE_ALLOWANCE;
-    let menu_height = menu_height + SETTINGS_MENU_WINDOW_EDGE_ALLOWANCE;
-    let gap = (SETTINGS_MENU_ANCHOR_GAP * monitor_scale_factor).round();
-    let preferred_x = if anchor_x + gap + menu_width <= right {
-        anchor_x + gap
-    } else {
-        anchor_x - menu_width - gap
-    };
-    let preferred_y = if anchor_y + gap + menu_height <= bottom {
-        anchor_y + gap
-    } else {
-        anchor_y - menu_height - gap
-    };
-    let x = preferred_x.round() as i32;
-    let y = preferred_y.round() as i32;
-
-    Some(PhysicalPosition::new(x, y))
-}
-
 #[tauri::command]
 #[cfg(not(mobile))]
 async fn open_settings_menu(
     app: AppHandle,
-    anchor_x: Option<f64>,
-    anchor_y: Option<f64>,
+    _anchor_x: Option<f64>,
+    _anchor_y: Option<f64>,
 ) -> Result<(), String> {
-    let anchor = anchor_x.zip(anchor_y);
-    if let Some(window) = app.get_webview_window("settings-menu") {
-        let _ = window.hide();
-        let menu_size = window
-            .outer_size()
-            .ok()
-            .map(|size| (f64::from(size.width), f64::from(size.height)));
-        if let Some(position) = settings_menu_position(&app, anchor, menu_size) {
-            let _ = window.set_position(Position::Physical(position));
-        }
-        window.show().map_err(|error| error.to_string())?;
-        return window.set_focus().map_err(|error| error.to_string());
-    }
-
-    let window = WebviewWindowBuilder::new(&app, "settings-menu", settings_menu_url()?)
-        .title("Silver Pet Settings")
-        .inner_size(SETTINGS_MENU_WIDTH, SETTINGS_MENU_HEIGHT)
-        .resizable(false)
-        .decorations(false)
-        .transparent(true)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .visible(false)
-        .build()
-        .map_err(|error| error.to_string())?;
-
-    let menu_size = window
-        .outer_size()
-        .ok()
-        .map(|size| (f64::from(size.width), f64::from(size.height)));
-    if let Some(position) = settings_menu_position(&app, anchor, menu_size) {
-        window
-            .set_position(Position::Physical(position))
-            .map_err(|error| error.to_string())?;
-    }
-
-    window.show().map_err(|error| error.to_string())?;
-    window.set_focus().map_err(|error| error.to_string())
+    show_settings_window(&app)
 }
 
 #[tauri::command]
@@ -3768,6 +3725,7 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            setup_tray(app)?;
             let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space);
             if let Err(error) = app.global_shortcut().register(shortcut) {
                 eprintln!(

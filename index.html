@@ -38,7 +38,7 @@
           <div class="settings-card">
             <div class="settings-header">
               <div>
-                <p class="settings-eyebrow">右键菜单</p>
+                <p class="settings-eyebrow">Settings</p>
                 <h2>桌宠设置</h2>
               </div>
               <button id="settings-close-btn" class="settings-icon-btn" type="button" aria-label="关闭设置">x</button>
@@ -107,9 +107,9 @@
                 <label class="settings-field">
                   <span>识别引擎</span>
                   <select id="asr-provider-select" class="skin-importer__select">
-                    <option value="windowsNative">Windows 原生识别（跟随系统听写）</option>
-                    <option value="browser">WebView 识别（可能筛选）</option>
-                    <option value="openAiCompatible">高精度 ASR（OpenAI 兼容）</option>
+                    <option value="windowsNative">Windows 原生识别（API 可能筛选）</option>
+                    <option value="browser">WebView 识别（API 可能筛选）</option>
+                    <option value="openAiCompatible">高精度 ASR（可保留原文）</option>
                   </select>
                 </label>
 
@@ -166,6 +166,7 @@
                 </label>
 
                 <p id="voice-status" class="settings-status" data-tone="idle">开启后，说话内容会作为语音命令发送给 LLM。AI 发声时会自动暂停麦克风，避免音响回声触发循环。</p>
+                <p id="asr-filter-status" class="settings-hint">Windows 原生识别和 WebView 识别没有应用级不雅内容筛选开关；需要保留原文时请使用高精度 ASR。</p>
 
                 <div class="settings-actions settings-actions--spread">
                   <button id="asr-save-btn" class="settings-btn settings-btn--primary" type="button">保存识别配置</button>

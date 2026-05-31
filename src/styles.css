@@ -1435,34 +1435,43 @@ body[data-view="mask-editor"] .mask-editor__stage {
   max-height: calc(100vh - 390px);
 }
 
-body[data-view="settings-menu"] {
+body[data-view="settings-menu"],
+body[data-view="settings"] {
   align-items: stretch;
   justify-content: stretch;
-  background: transparent;
+  background: #edf4f7;
 }
 
-body[data-view="settings-menu"] .window-shell {
+body[data-view="settings-menu"] .window-shell,
+body[data-view="settings"] .window-shell {
   width: 100vw;
   height: 100vh;
   zoom: 1;
 }
 
-body[data-view="settings-menu"] .pet-app {
-  padding: 12px;
+body[data-view="settings-menu"] .pet-app,
+body[data-view="settings"] .pet-app {
+  padding: 20px;
 }
 
 body[data-view="settings-menu"] .speech-bubble,
 body[data-view="settings-menu"] .history-panel,
 body[data-view="settings-menu"] .floating-input,
 body[data-view="settings-menu"] .pet-stage,
-body[data-view="settings-menu"] .side-dock {
+body[data-view="settings-menu"] .side-dock,
+body[data-view="settings"] .speech-bubble,
+body[data-view="settings"] .history-panel,
+body[data-view="settings"] .floating-input,
+body[data-view="settings"] .pet-stage,
+body[data-view="settings"] .side-dock {
   display: none;
 }
 
-body[data-view="settings-menu"] .settings-panel {
+body[data-view="settings-menu"] .settings-panel,
+body[data-view="settings"] .settings-panel {
   inset: 0;
   display: flex;
-  padding: 12px;
+  padding: 20px;
   opacity: 1;
   pointer-events: auto;
   zoom: 1;
@@ -1474,8 +1483,15 @@ body[data-view="settings-menu"] .settings-card {
   max-height: calc(100vh - 24px);
 }
 
+body[data-view="settings"] .settings-card {
+  width: min(100%, 940px);
+  max-height: calc(100vh - 40px);
+}
+
 body[data-view="settings-menu"] .settings-tab-btn[data-settings-tab="mask"],
-body[data-view="settings-menu"] .settings-section[data-settings-section="mask"] {
+body[data-view="settings-menu"] .settings-section[data-settings-section="mask"],
+body[data-view="settings"] .settings-tab-btn[data-settings-tab="mask"],
+body[data-view="settings"] .settings-section[data-settings-section="mask"] {
   display: none;
 }
 

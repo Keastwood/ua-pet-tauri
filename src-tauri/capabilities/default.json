@@ -2,9 +2,10 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main", "mask-editor"],
+  "windows": ["main", "mask-editor", "settings", "settings-menu"],
   "permissions": [
     "core:default",
+    "core:tray:default",
     "opener:default"
   ]
 }

@@ -17,7 +17,12 @@ const IS_MASK_EDITOR_WINDOW =
   getCurrentWindowLabel() === "mask-editor" ||
   new URLSearchParams(window.location.search).get("view") === "mask-editor" ||
   window.location.hash === "#mask-editor";
+const IS_SETTINGS_WINDOW =
+  getCurrentWindowLabel() === "settings" ||
+  new URLSearchParams(window.location.search).get("view") === "settings" ||
+  window.location.hash === "#settings";
 const IS_SETTINGS_MENU_WINDOW =
+  IS_SETTINGS_WINDOW ||
   getCurrentWindowLabel() === "settings-menu" ||
   new URLSearchParams(window.location.search).get("view") === "settings-menu" ||
   window.location.hash === "#settings-menu";
@@ -132,6 +137,9 @@ interface AsrConfigView {
   prompt: string;
   timeoutSecs: number;
   defaultPrompt: string;
+  nativeSpeechAvailable: boolean;
+  nativeSpeechFilterConfigurable: boolean;
+  browserSpeechFilterConfigurable: boolean;
 }
 
 interface AsrTranscriptionResponse {
@@ -1145,7 +1153,9 @@ window.addEventListener("DOMContentLoaded", () => {
   document.body.dataset.view = IS_MASK_EDITOR_WINDOW
     ? "mask-editor"
     : IS_SETTINGS_MENU_WINDOW
-      ? "settings-menu"
+      ? IS_SETTINGS_WINDOW
+        ? "settings"
+        : "settings-menu"
       : IS_MOBILE_PET_WINDOW
         ? "mobile-pet"
         : "pet";
@@ -1196,6 +1206,7 @@ window.addEventListener("DOMContentLoaded", () => {
   const voiceSensitivityInput = must<HTMLInputElement>("#voice-sensitivity-input");
   const voiceSensitivityValue = must<HTMLElement>("#voice-sensitivity-value");
   const voiceStatus = must<HTMLParagraphElement>("#voice-status");
+  const asrFilterStatus = must<HTMLParagraphElement>("#asr-filter-status");
   const voiceTestButton = must<HTMLButtonElement>("#voice-test-btn");
   const voicePrivacyButton = must<HTMLButtonElement>("#voice-privacy-btn");
   const voiceRestartButton = must<HTMLButtonElement>("#voice-restart-btn");
@@ -1337,6 +1348,9 @@ window.addEventListener("DOMContentLoaded", () => {
     prompt: "",
     timeoutSecs: 45,
     defaultPrompt: "",
+    nativeSpeechAvailable: false,
+    nativeSpeechFilterConfigurable: false,
+    browserSpeechFilterConfigurable: false,
   };
   let ttsPlaybackEnabled = false;
   let ttsPlaybackRequestId = 0;
@@ -2586,6 +2600,14 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function syncVoiceControls(): void {
+    const windowsNativeOption = asrProviderSelect.querySelector<HTMLOptionElement>('option[value="windowsNative"]');
+    if (windowsNativeOption) {
+      windowsNativeOption.disabled = !asrConfig.nativeSpeechAvailable;
+      windowsNativeOption.textContent = asrConfig.nativeSpeechAvailable
+        ? "Windows 原生识别（API 可能筛选）"
+        : "Windows 原生识别（当前系统不可用）";
+    }
+
     const selectedAsrProvider = asrProviderSelect.value || asrConfig.provider;
     const usesExternalAsr = selectedAsrProvider === "openAiCompatible";
     const usesWindowsNativeAsr = selectedAsrProvider === "windowsNative";
@@ -2599,6 +2621,17 @@ window.addEventListener("DOMContentLoaded", () => {
     voiceSensitivityValue.textContent = String(voiceSensitivity);
     const threshold = Math.round(getVoiceConfidenceThreshold(voiceSensitivity) * 100);
     voiceRestartButton.disabled = !state.voiceEnabled || voicePausedForAiSpeech;
+    if (usesExternalAsr) {
+      asrFilterStatus.textContent = "高精度 ASR 会把音频直接发给配置的转写服务；当前默认提示词会要求保留口语、脏话和成人用语原文。";
+    } else if (usesWindowsNativeAsr) {
+      asrFilterStatus.textContent = asrConfig.nativeSpeechFilterConfigurable
+        ? "Windows 原生识别支持应用内筛选配置。"
+        : "Windows 原生识别的 WinRT API 没有应用级不雅内容筛选开关；Win+H 的开关不会可靠作用到这里。";
+    } else {
+      asrFilterStatus.textContent = asrConfig.browserSpeechFilterConfigurable
+        ? "当前 WebView 暴露了识别筛选配置。"
+        : "WebView/Web Speech API 没有标准不雅内容筛选开关；不同 WebView 内核可能自行筛选。";
+    }
 
     if (!usesExternalAsr && !usesWindowsNativeAsr && !getSpeechRecognitionConstructor()) {
       voiceEnabledInput.disabled = true;
@@ -2620,7 +2653,7 @@ window.addEventListener("DOMContentLoaded", () => {
         usesExternalAsr
           ? `高精度 ASR 未开启。当前灵敏度 ${voiceSensitivity}，会按静音自动切句并发送到识别服务。`
           : usesWindowsNativeAsr
-            ? `Windows 原生识别未开启。当前灵敏度 ${voiceSensitivity}，会使用系统听写链路和系统筛选设置。`
+            ? `Windows 原生识别未开启。当前灵敏度 ${voiceSensitivity}，此 API 可能自行筛选文本。`
             : `WebView 识别未开启。当前灵敏度 ${voiceSensitivity}，短句置信度阈值约 ${threshold}%；较完整文本会优先采用。`,
         "idle",
       );
@@ -3424,7 +3457,7 @@ window.addEventListener("DOMContentLoaded", () => {
         language: voiceLanguage,
       });
       syncVoiceControls();
-      setVoiceStatus("Windows 原生识别已开启，会使用系统听写链路和系统不雅内容筛选设置。", "warm");
+      setVoiceStatus("Windows 原生识别已开启；此 API 没有应用级不雅内容筛选开关。", "warm");
       startNativeSpeechWatchdog();
       if (options.announce) {
         setBubble("Windows 原生语音监听开启啦。", "hint", 1900);
@@ -5322,8 +5355,8 @@ window.addEventListener("DOMContentLoaded", () => {
       asrProviderSelect.value === "openAiCompatible"
         ? "已切到高精度 ASR，请保存配置后重启监听。"
         : asrProviderSelect.value === "windowsNative"
-          ? "已切到 Windows 原生识别，请保存配置后重启监听。"
-          : "已切到 WebView 识别，请保存配置后重启监听。",
+          ? "已切到 Windows 原生识别；此 API 没有不雅内容筛选开关。请保存配置后重启监听。"
+          : "已切到 WebView 识别；Web Speech API 没有标准筛选开关。请保存配置后重启监听。",
       "idle",
     );
   });
