@@ -80,6 +80,8 @@ Supported providers:
 - `OpenAI compatible /audio/speech`: configure a base URL or full `/audio/speech` URL, model, voice, optional API key, output format, and speed.
 - `Custom JSON audio endpoint`: posts `text`, `input`, optional `model`, optional `voice`, `format`, `mediaType`, and `speed` to the exact endpoint, expecting an audio response body.
 
+For managed GPT-SoVITS, `list_tts_assets` scans local weight and audio folders so the settings UI can present dropdowns instead of forcing manual path entry. It searches common GPT/SoVITS weight directories, reads `logs/**/2-name2text.txt` to attach prompt text to reference audio options, and exposes `pick_tts_path` for native folder/file selection on desktop.
+
 When AI voice is enabled, the frontend calls `synthesize_speech` after a reply is ready and plays the returned audio data URL while keeping the mouth animation active. The feature is HTTP-based, so GPT-SoVITS, local voice changers, and hosted TTS bridges can be swapped without changing the desktop pet code.
 
 ## Interaction Tools

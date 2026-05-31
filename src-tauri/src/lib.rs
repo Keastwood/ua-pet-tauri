@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::{
+    collections::HashMap,
     env, fs,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Mutex,
@@ -40,6 +42,7 @@ const DEFAULT_YUA_REF_AUDIO_REL: &str =
     "logs/yua-s-v2/5-wav32k/ua23102619.mp3_0144998912_0145146368.wav";
 const DEFAULT_YUA_PROMPT_TEXT: &str = "然后再盛两杯小果汁儿.";
 const MANAGED_GPT_SOVITS_STARTUP_TIMEOUT_SECS: u64 = 180;
+const TTS_ASSET_SCAN_LIMIT_PER_KIND: usize = 500;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 #[cfg(not(mobile))]
@@ -211,6 +214,37 @@ struct TtsSynthesisResponse {
     audio_data_url: String,
     content_type: String,
     provider: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PickTtsPathRequest {
+    kind: String,
+    current_path: Option<String>,
+    root_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListTtsAssetsRequest {
+    root: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TtsAssetOption {
+    label: String,
+    path: String,
+    prompt_text: Option<String>,
+    duration_secs: Option<f32>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TtsAssetCatalog {
+    gpt_weights: Vec<TtsAssetOption>,
+    sovits_weights: Vec<TtsAssetOption>,
+    ref_audios: Vec<TtsAssetOption>,
 }
 
 #[derive(Debug, Serialize)]
@@ -580,6 +614,281 @@ fn yaml_path(path: &str) -> String {
 
 fn managed_gpt_sovits_base_url(port: u16) -> String {
     format!("http://127.0.0.1:{port}")
+}
+
+fn normalize_extension(path: &Path) -> String {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .trim_start_matches('.')
+        .to_ascii_lowercase()
+}
+
+fn path_matches_extensions(path: &Path, extensions: &[&str]) -> bool {
+    let extension = normalize_extension(path);
+    extensions
+        .iter()
+        .any(|candidate| extension == candidate.trim_start_matches('.').to_ascii_lowercase())
+}
+
+fn scan_files_by_extension(
+    root: &Path,
+    relative_dirs: &[&str],
+    extensions: &[&str],
+    limit: usize,
+) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for relative_dir in relative_dirs {
+        if files.len() >= limit {
+            break;
+        }
+        let dir = root.join(relative_dir);
+        scan_dir_by_extension(&dir, extensions, limit, &mut files, 0);
+    }
+    files
+}
+
+fn scan_dir_by_extension(
+    dir: &Path,
+    extensions: &[&str],
+    limit: usize,
+    files: &mut Vec<PathBuf>,
+    depth: usize,
+) {
+    if files.len() >= limit || depth > 8 || !dir.is_dir() {
+        return;
+    }
+
+    let mut entries = match fs::read_dir(dir) {
+        Ok(entries) => entries.filter_map(Result::ok).collect::<Vec<_>>(),
+        Err(_) => return,
+    };
+    entries.sort_by_key(|entry| path_priority_key(&entry.path()));
+
+    for entry in entries {
+        if files.len() >= limit {
+            break;
+        }
+
+        let path = entry.path();
+        if path.is_dir() {
+            scan_dir_by_extension(&path, extensions, limit, files, depth + 1);
+        } else if path.is_file() && path_matches_extensions(&path, extensions) {
+            files.push(path);
+        }
+    }
+}
+
+fn relative_path_label(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn path_priority_key(path: &Path) -> (u8, String) {
+    let lower = path.to_string_lossy().to_ascii_lowercase();
+    let priority = if lower.contains("yua-s-v2") {
+        0
+    } else if lower.contains("yua") {
+        1
+    } else if lower.contains("ua") {
+        2
+    } else {
+        3
+    };
+    (priority, lower)
+}
+
+fn truncate_label(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let truncated: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        truncated
+    }
+}
+
+fn asset_sort_key(option: &TtsAssetOption) -> (u8, String) {
+    let (priority, _) = path_priority_key(Path::new(&option.path));
+    (priority, option.label.to_ascii_lowercase())
+}
+
+fn sort_tts_assets(options: &mut [TtsAssetOption]) {
+    options.sort_by_key(asset_sort_key);
+}
+
+fn build_weight_options(root: &Path, paths: Vec<PathBuf>) -> Vec<TtsAssetOption> {
+    let mut options = paths
+        .into_iter()
+        .map(|path| TtsAssetOption {
+            label: relative_path_label(root, &path),
+            path: path_to_string(&path),
+            prompt_text: None,
+            duration_secs: None,
+        })
+        .collect::<Vec<_>>();
+    sort_tts_assets(&mut options);
+    options
+}
+
+fn read_wav_duration_secs(path: &Path) -> Option<f32> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut header = [0_u8; 12];
+    file.read_exact(&mut header).ok()?;
+    if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
+        return None;
+    }
+
+    let mut channels = None::<u16>;
+    let mut sample_rate = None::<u32>;
+    let mut bits_per_sample = None::<u16>;
+    let mut data_size = None::<u32>;
+
+    loop {
+        let mut chunk_header = [0_u8; 8];
+        if file.read_exact(&mut chunk_header).is_err() {
+            break;
+        }
+        let chunk_id = &chunk_header[0..4];
+        let chunk_size = u32::from_le_bytes([
+            chunk_header[4],
+            chunk_header[5],
+            chunk_header[6],
+            chunk_header[7],
+        ]);
+
+        if chunk_id == b"fmt " {
+            let mut fmt = vec![0_u8; chunk_size as usize];
+            file.read_exact(&mut fmt).ok()?;
+            if fmt.len() >= 16 {
+                channels = Some(u16::from_le_bytes([fmt[2], fmt[3]]));
+                sample_rate = Some(u32::from_le_bytes([fmt[4], fmt[5], fmt[6], fmt[7]]));
+                bits_per_sample = Some(u16::from_le_bytes([fmt[14], fmt[15]]));
+            }
+        } else if chunk_id == b"data" {
+            data_size = Some(chunk_size);
+            file.seek(SeekFrom::Current(chunk_size as i64)).ok()?;
+        } else {
+            file.seek(SeekFrom::Current(chunk_size as i64)).ok()?;
+        }
+
+        if chunk_size % 2 == 1 {
+            file.seek(SeekFrom::Current(1)).ok()?;
+        }
+
+        if channels.is_some()
+            && sample_rate.is_some()
+            && bits_per_sample.is_some()
+            && data_size.is_some()
+        {
+            break;
+        }
+    }
+
+    let channels = channels? as f32;
+    let sample_rate = sample_rate? as f32;
+    let bytes_per_sample = bits_per_sample? as f32 / 8.0;
+    let data_size = data_size? as f32;
+    let bytes_per_second = channels * sample_rate * bytes_per_sample;
+    (bytes_per_second > 0.0).then_some((data_size / bytes_per_second * 10.0).round() / 10.0)
+}
+
+fn load_ref_audio_prompt_map(root: &Path) -> HashMap<String, String> {
+    let prompt_files =
+        scan_files_by_extension(root, &["logs"], &["txt"], TTS_ASSET_SCAN_LIMIT_PER_KIND);
+    let mut prompt_map = HashMap::new();
+
+    for path in prompt_files {
+        if path.file_name().and_then(|name| name.to_str()) != Some("2-name2text.txt") {
+            continue;
+        }
+
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        for line in text.lines() {
+            let mut parts = line.split('\t').collect::<Vec<_>>();
+            if parts.len() < 2 {
+                continue;
+            }
+            let Some(file_name) = parts
+                .first()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            let prompt_text = parts.pop().unwrap_or_default().trim();
+            if !prompt_text.is_empty() {
+                prompt_map
+                    .entry(file_name)
+                    .or_insert_with(|| prompt_text.to_string());
+            }
+        }
+    }
+
+    prompt_map
+}
+
+fn build_ref_audio_options(root: &Path, paths: Vec<PathBuf>) -> Vec<TtsAssetOption> {
+    let prompt_map = load_ref_audio_prompt_map(root);
+    let mut options = paths
+        .into_iter()
+        .map(|path| {
+            let file_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default();
+            let prompt_text = prompt_map.get(file_name).cloned();
+            let duration_secs = if normalize_extension(&path) == "wav" {
+                read_wav_duration_secs(&path)
+            } else {
+                None
+            };
+            let prompt_label = prompt_text
+                .as_deref()
+                .map(|text| truncate_label(text, 28))
+                .unwrap_or_else(|| relative_path_label(root, &path));
+            let duration_label = duration_secs
+                .map(|duration| format!("{duration:.1}s · "))
+                .unwrap_or_default();
+
+            TtsAssetOption {
+                label: format!("{duration_label}{file_name} · {prompt_label}"),
+                path: path_to_string(&path),
+                prompt_text,
+                duration_secs,
+            }
+        })
+        .collect::<Vec<_>>();
+    options.sort_by_key(|option| {
+        let duration_priority = option
+            .duration_secs
+            .map(|duration| {
+                if (3.0..=10.0).contains(&duration) {
+                    0
+                } else {
+                    1
+                }
+            })
+            .unwrap_or(2);
+        let (path_priority, _) = path_priority_key(Path::new(&option.path));
+        (
+            path_priority,
+            duration_priority,
+            option.label.to_ascii_lowercase(),
+        )
+    });
+    options
+}
+
+fn tts_asset_root(request_root: Option<String>) -> Result<PathBuf, String> {
+    clean_optional(request_root)
+        .map(PathBuf::from)
+        .or_else(default_gpt_sovits_root)
+        .ok_or_else(|| "还没有设置 GPT-SoVITS 根目录。".to_string())
 }
 
 fn llm_config_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -1528,6 +1837,107 @@ fn validate_tts_config(config: &TtsConfigView) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[tauri::command]
+fn list_tts_assets(request: ListTtsAssetsRequest) -> Result<TtsAssetCatalog, String> {
+    let root = tts_asset_root(request.root)?;
+    if !root.is_dir() {
+        return Err(format!("GPT-SoVITS 根目录不存在：{}", root.display()));
+    }
+
+    let gpt_paths = scan_files_by_extension(
+        &root,
+        &[
+            "GPT_weights",
+            "GPT_weights_v2",
+            "GPT_weights_v3",
+            "GPT_weights_v4",
+        ],
+        &["ckpt", "safetensors"],
+        TTS_ASSET_SCAN_LIMIT_PER_KIND,
+    );
+    let sovits_paths = scan_files_by_extension(
+        &root,
+        &[
+            "SoVITS_weights",
+            "SoVITS_weights_v2",
+            "SoVITS_weights_v3",
+            "SoVITS_weights_v4",
+        ],
+        &["pth", "ckpt", "safetensors"],
+        TTS_ASSET_SCAN_LIMIT_PER_KIND,
+    );
+    let ref_audio_paths = scan_files_by_extension(
+        &root,
+        &["logs", "output", "outputs", "reference", "references"],
+        &["wav", "mp3", "flac", "ogg", "m4a", "aac"],
+        TTS_ASSET_SCAN_LIMIT_PER_KIND,
+    );
+
+    Ok(TtsAssetCatalog {
+        gpt_weights: build_weight_options(&root, gpt_paths),
+        sovits_weights: build_weight_options(&root, sovits_paths),
+        ref_audios: build_ref_audio_options(&root, ref_audio_paths),
+    })
+}
+
+#[tauri::command]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn pick_tts_path(request: PickTtsPathRequest) -> Result<Option<String>, String> {
+    let kind = request.kind.trim();
+    let mut dialog = rfd::FileDialog::new();
+
+    let initial_dir = clean_optional(request.current_path.clone())
+        .and_then(|path| {
+            let path = PathBuf::from(path);
+            if path.is_dir() {
+                Some(path)
+            } else if path.is_file() {
+                path.parent().map(Path::to_path_buf)
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            clean_optional(request.root_path)
+                .map(PathBuf::from)
+                .filter(|path| path.is_dir())
+        })
+        .or_else(default_gpt_sovits_root);
+
+    if let Some(initial_dir) = initial_dir {
+        dialog = dialog.set_directory(initial_dir);
+    }
+
+    let picked = match kind {
+        "root" => dialog.set_title("选择 GPT-SoVITS 根目录").pick_folder(),
+        "python" => dialog
+            .set_title("选择 GPT-SoVITS runtime/python.exe")
+            .add_filter("Python", &["exe"])
+            .pick_file(),
+        "gptWeight" => dialog
+            .set_title("选择 GPT 权重")
+            .add_filter("GPT 权重", &["ckpt", "safetensors"])
+            .pick_file(),
+        "sovitsWeight" => dialog
+            .set_title("选择 SoVITS 权重")
+            .add_filter("SoVITS 权重", &["pth", "ckpt", "safetensors"])
+            .pick_file(),
+        "refAudio" => dialog
+            .set_title("选择参考音频")
+            .add_filter("音频", &["wav", "mp3", "flac", "ogg", "m4a", "aac"])
+            .pick_file(),
+        _ => return Err("未知的语音路径类型。".to_string()),
+    };
+
+    Ok(picked.as_deref().map(path_to_string))
+}
+
+#[tauri::command]
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn pick_tts_path(_request: PickTtsPathRequest) -> Result<Option<String>, String> {
+    Err("移动端暂不支持系统文件选择器。".to_string())
 }
 
 #[tauri::command]
@@ -2657,10 +3067,12 @@ pub fn run() {
             get_pet_cursor_position,
             get_pet_window_position,
             get_tts_config,
+            list_tts_assets,
             list_custom_skins,
             llm_chat,
             llm_pet_interact,
             llm_pet_interact_stream,
+            pick_tts_path,
             save_llm_config,
             save_tts_config,
             save_custom_skin,

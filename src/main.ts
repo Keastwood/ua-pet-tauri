@@ -122,6 +122,19 @@ interface TtsSynthesisResponse {
   provider: string;
 }
 
+interface TtsAssetOption {
+  label: string;
+  path: string;
+  promptText?: string;
+  durationSecs?: number;
+}
+
+interface TtsAssetCatalog {
+  gptWeights: TtsAssetOption[];
+  sovitsWeights: TtsAssetOption[];
+  refAudios: TtsAssetOption[];
+}
+
 interface InteractionRecord {
   id: number;
   timestampMs: number;
@@ -1084,10 +1097,17 @@ window.addEventListener("DOMContentLoaded", () => {
   const ttsProviderSelect = must<HTMLSelectElement>("#tts-provider-select");
   const ttsEndpointInput = must<HTMLInputElement>("#tts-endpoint-input");
   const ttsManagedRootInput = must<HTMLInputElement>("#tts-managed-root-input");
+  const ttsManagedRootPickButton = must<HTMLButtonElement>("#tts-managed-root-pick-btn");
   const ttsManagedPythonInput = must<HTMLInputElement>("#tts-managed-python-input");
+  const ttsManagedPythonPickButton = must<HTMLButtonElement>("#tts-managed-python-pick-btn");
   const ttsManagedPortInput = must<HTMLInputElement>("#tts-managed-port-input");
+  const ttsGptWeightSelect = must<HTMLSelectElement>("#tts-gpt-weight-select");
   const ttsGptWeightPathInput = must<HTMLInputElement>("#tts-gpt-weight-path-input");
+  const ttsGptWeightPickButton = must<HTMLButtonElement>("#tts-gpt-weight-pick-btn");
+  const ttsSovitsWeightSelect = must<HTMLSelectElement>("#tts-sovits-weight-select");
   const ttsSovitsWeightPathInput = must<HTMLInputElement>("#tts-sovits-weight-path-input");
+  const ttsSovitsWeightPickButton = must<HTMLButtonElement>("#tts-sovits-weight-pick-btn");
+  const ttsAssetsRefreshButton = must<HTMLButtonElement>("#tts-assets-refresh-btn");
   const ttsManagedFieldEls = Array.from(document.querySelectorAll<HTMLElement>("[data-tts-managed-field]"));
   const ttsApiKeyInput = must<HTMLInputElement>("#tts-api-key-input");
   const ttsClearKeyInput = must<HTMLInputElement>("#tts-clear-key-input");
@@ -1095,7 +1115,9 @@ window.addEventListener("DOMContentLoaded", () => {
   const ttsVoiceInput = must<HTMLInputElement>("#tts-voice-input");
   const ttsMediaTypeSelect = must<HTMLSelectElement>("#tts-media-type-select");
   const ttsTextLangInput = must<HTMLInputElement>("#tts-text-lang-input");
+  const ttsRefAudioSelect = must<HTMLSelectElement>("#tts-ref-audio-select");
   const ttsRefAudioPathInput = must<HTMLInputElement>("#tts-ref-audio-path-input");
+  const ttsRefAudioPickButton = must<HTMLButtonElement>("#tts-ref-audio-pick-btn");
   const ttsPromptLangInput = must<HTMLInputElement>("#tts-prompt-lang-input");
   const ttsPromptTextInput = must<HTMLTextAreaElement>("#tts-prompt-text-input");
   const ttsSpeedInput = must<HTMLInputElement>("#tts-speed-input");
@@ -1184,6 +1206,8 @@ window.addEventListener("DOMContentLoaded", () => {
   let voiceLanguage = localStorage.getItem(VOICE_LANGUAGE_STORAGE_KEY) || "zh-CN";
   let ttsPlaybackEnabled = false;
   let ttsPlaybackRequestId = 0;
+  let ttsAssetCatalog: TtsAssetCatalog = { gptWeights: [], sovitsWeights: [], refAudios: [] };
+  let ttsAssetCatalogRequestId = 0;
   let activeSpeechAudio: HTMLAudioElement | null = null;
   let maskEditorParts = cloneBodyMaskParts(getBodyMasksForSkin(activeSkin));
   let selectedMaskPartId = maskEditorParts[0]?.id ?? "";
@@ -2477,6 +2501,147 @@ window.addEventListener("DOMContentLoaded", () => {
     return Math.min(65535, Math.max(1, Math.round(value)));
   }
 
+  function normalizeTtsPath(value: string): string {
+    return value.trim().replace(/\//g, "\\").toLocaleLowerCase();
+  }
+
+  function joinManagedRootPath(root: string, relativePath: string): string {
+    const cleanRoot = root.trim().replace(/[\\/]+$/, "");
+    return cleanRoot ? `${cleanRoot}\\${relativePath.replace(/\//g, "\\")}` : "";
+  }
+
+  function shouldReplaceManagedPath(currentPath: string, previousRoot: string): boolean {
+    const current = normalizeTtsPath(currentPath);
+    const previous = normalizeTtsPath(previousRoot);
+    return !current || (!!previous && current.startsWith(previous));
+  }
+
+  function applyManagedRootDefaults(root: string, previousRoot = ""): void {
+    if (!root.trim()) {
+      return;
+    }
+
+    if (shouldReplaceManagedPath(ttsManagedPythonInput.value, previousRoot)) {
+      ttsManagedPythonInput.value = joinManagedRootPath(root, "runtime/python.exe");
+    }
+    if (shouldReplaceManagedPath(ttsGptWeightPathInput.value, previousRoot)) {
+      ttsGptWeightPathInput.value = joinManagedRootPath(root, "GPT_weights_v2/yua-s-v2-e50.ckpt");
+    }
+    if (shouldReplaceManagedPath(ttsSovitsWeightPathInput.value, previousRoot)) {
+      ttsSovitsWeightPathInput.value = joinManagedRootPath(root, "SoVITS_weights_v2/yua-s-v2_e24_s672.pth");
+    }
+    if (shouldReplaceManagedPath(ttsRefAudioPathInput.value, previousRoot)) {
+      ttsRefAudioPathInput.value = joinManagedRootPath(
+        root,
+        "logs/yua-s-v2/5-wav32k/ua23102619.mp3_0144998912_0145146368.wav",
+      );
+    }
+  }
+
+  function findTtsAssetByPath(options: TtsAssetOption[], path: string): TtsAssetOption | undefined {
+    const normalized = normalizeTtsPath(path);
+    return options.find((option) => normalizeTtsPath(option.path) === normalized);
+  }
+
+  function renderTtsAssetSelect(
+    select: HTMLSelectElement,
+    options: TtsAssetOption[],
+    currentPath: string,
+    placeholder: string,
+  ): void {
+    select.replaceChildren();
+    select.append(new Option(placeholder, ""));
+
+    for (const option of options) {
+      const element = new Option(option.label, option.path);
+      if (option.promptText) {
+        element.dataset.promptText = option.promptText;
+      }
+      select.append(element);
+    }
+
+    const current = currentPath.trim();
+    const matched = current ? findTtsAssetByPath(options, current) : undefined;
+    if (current && !matched) {
+      select.append(new Option(`当前：${current}`, current));
+    }
+    select.value = matched?.path ?? current;
+  }
+
+  function renderTtsAssetSelects(): void {
+    renderTtsAssetSelect(ttsGptWeightSelect, ttsAssetCatalog.gptWeights, ttsGptWeightPathInput.value, "选择已扫描 GPT 权重");
+    renderTtsAssetSelect(
+      ttsSovitsWeightSelect,
+      ttsAssetCatalog.sovitsWeights,
+      ttsSovitsWeightPathInput.value,
+      "选择已扫描 SoVITS 权重",
+    );
+    renderTtsAssetSelect(ttsRefAudioSelect, ttsAssetCatalog.refAudios, ttsRefAudioPathInput.value, "选择已扫描参考音频");
+    syncTtsProviderFields();
+  }
+
+  function applyRefAudioSelection(path: string): void {
+    ttsRefAudioPathInput.value = path;
+    const option = findTtsAssetByPath(ttsAssetCatalog.refAudios, path);
+    if (option?.promptText) {
+      ttsPromptTextInput.value = option.promptText;
+    }
+  }
+
+  async function refreshTtsAssetCatalog(announce = false): Promise<void> {
+    const root = ttsManagedRootInput.value.trim();
+    const requestId = ++ttsAssetCatalogRequestId;
+    if (!root) {
+      ttsAssetCatalog = { gptWeights: [], sovitsWeights: [], refAudios: [] };
+      renderTtsAssetSelects();
+      return;
+    }
+
+    if (announce) {
+      setTtsStatus("正在扫描 GPT-SoVITS 模型和参考音频...", "idle");
+      ttsAssetsRefreshButton.disabled = true;
+    }
+
+    try {
+      const catalog = await invoke<TtsAssetCatalog>("list_tts_assets", {
+        request: { root },
+      });
+      if (requestId !== ttsAssetCatalogRequestId) {
+        return;
+      }
+      ttsAssetCatalog = catalog;
+      renderTtsAssetSelects();
+      if (announce) {
+        setTtsStatus(
+          `已扫描到 ${catalog.gptWeights.length} 个 GPT 权重、${catalog.sovitsWeights.length} 个 SoVITS 权重、${catalog.refAudios.length} 个参考音频。`,
+          "warm",
+        );
+      }
+    } catch (error) {
+      console.error(error);
+      if (requestId === ttsAssetCatalogRequestId) {
+        ttsAssetCatalog = { gptWeights: [], sovitsWeights: [], refAudios: [] };
+        renderTtsAssetSelects();
+      }
+      if (announce) {
+        setTtsStatus(`扫描 GPT-SoVITS 资源失败：${String(error)}`, "alert");
+      }
+    } finally {
+      ttsAssetsRefreshButton.disabled = false;
+      syncTtsProviderFields();
+    }
+  }
+
+  async function pickTtsPath(kind: string, currentPath: string): Promise<string | null> {
+    return invoke<string | null>("pick_tts_path", {
+      request: {
+        kind,
+        currentPath: currentPath.trim() || null,
+        rootPath: ttsManagedRootInput.value.trim() || null,
+      },
+    });
+  }
+
   function applyTtsConfig(config: TtsConfigView): void {
     ttsPlaybackEnabled = config.enabled;
     if (!config.enabled) {
@@ -2506,6 +2671,7 @@ window.addEventListener("DOMContentLoaded", () => {
     ttsSpeedValue.textContent = `${Math.round((config.speedFactor || 1) * 100)}%`;
     ttsTimeoutInput.value = String(config.timeoutSecs || 60);
     syncTtsProviderFields();
+    void refreshTtsAssetCatalog();
   }
 
   function syncTtsProviderFields(): void {
@@ -2519,11 +2685,20 @@ window.addEventListener("DOMContentLoaded", () => {
     ttsManagedRootInput.disabled = !isManagedGptSovits;
     ttsManagedPythonInput.disabled = !isManagedGptSovits;
     ttsManagedPortInput.disabled = !isManagedGptSovits;
+    ttsManagedRootPickButton.disabled = !isManagedGptSovits;
+    ttsManagedPythonPickButton.disabled = !isManagedGptSovits;
+    ttsAssetsRefreshButton.disabled = !isManagedGptSovits;
+    ttsGptWeightSelect.disabled = !isManagedGptSovits || ttsAssetCatalog.gptWeights.length === 0;
     ttsGptWeightPathInput.disabled = !isManagedGptSovits;
+    ttsGptWeightPickButton.disabled = !isManagedGptSovits;
+    ttsSovitsWeightSelect.disabled = !isManagedGptSovits || ttsAssetCatalog.sovitsWeights.length === 0;
     ttsSovitsWeightPathInput.disabled = !isManagedGptSovits;
+    ttsSovitsWeightPickButton.disabled = !isManagedGptSovits;
     ttsManagedFieldEls.forEach((element) => {
       element.hidden = !isManagedGptSovits;
     });
+    ttsRefAudioSelect.disabled = !isGptSovits || ttsAssetCatalog.refAudios.length === 0;
+    ttsRefAudioPickButton.disabled = !isGptSovits;
     ttsEndpointInput.disabled = isManagedGptSovits;
     ttsApiKeyInput.disabled = isManagedGptSovits;
     ttsClearKeyInput.disabled = isManagedGptSovits;
@@ -4418,6 +4593,119 @@ window.addEventListener("DOMContentLoaded", () => {
 
   ttsProviderSelect.addEventListener("change", () => {
     syncTtsProviderFields();
+    if (ttsProviderSelect.value === "managedGptSovits") {
+      void refreshTtsAssetCatalog();
+    }
+  });
+
+  ttsManagedRootInput.addEventListener("change", () => {
+    void refreshTtsAssetCatalog(true);
+  });
+
+  ttsManagedRootPickButton.addEventListener("click", () => {
+    const previousRoot = ttsManagedRootInput.value.trim();
+    void pickTtsPath("root", previousRoot)
+      .then((path) => {
+        if (!path) {
+          return;
+        }
+        ttsManagedRootInput.value = path;
+        applyManagedRootDefaults(path, previousRoot);
+        void refreshTtsAssetCatalog(true);
+      })
+      .catch((error) => {
+        console.error(error);
+        setTtsStatus(`选择 GPT-SoVITS 根目录失败：${String(error)}`, "alert");
+      });
+  });
+
+  ttsManagedPythonPickButton.addEventListener("click", () => {
+    void pickTtsPath("python", ttsManagedPythonInput.value)
+      .then((path) => {
+        if (path) {
+          ttsManagedPythonInput.value = path;
+        }
+      })
+      .catch((error) => {
+        console.error(error);
+        setTtsStatus(`选择 Python 路径失败：${String(error)}`, "alert");
+      });
+  });
+
+  ttsGptWeightSelect.addEventListener("change", () => {
+    if (ttsGptWeightSelect.value) {
+      ttsGptWeightPathInput.value = ttsGptWeightSelect.value;
+    }
+  });
+
+  ttsGptWeightPathInput.addEventListener("change", () => {
+    renderTtsAssetSelects();
+  });
+
+  ttsGptWeightPickButton.addEventListener("click", () => {
+    void pickTtsPath("gptWeight", ttsGptWeightPathInput.value)
+      .then((path) => {
+        if (path) {
+          ttsGptWeightPathInput.value = path;
+          renderTtsAssetSelects();
+        }
+      })
+      .catch((error) => {
+        console.error(error);
+        setTtsStatus(`选择 GPT 权重失败：${String(error)}`, "alert");
+      });
+  });
+
+  ttsSovitsWeightSelect.addEventListener("change", () => {
+    if (ttsSovitsWeightSelect.value) {
+      ttsSovitsWeightPathInput.value = ttsSovitsWeightSelect.value;
+    }
+  });
+
+  ttsSovitsWeightPathInput.addEventListener("change", () => {
+    renderTtsAssetSelects();
+  });
+
+  ttsSovitsWeightPickButton.addEventListener("click", () => {
+    void pickTtsPath("sovitsWeight", ttsSovitsWeightPathInput.value)
+      .then((path) => {
+        if (path) {
+          ttsSovitsWeightPathInput.value = path;
+          renderTtsAssetSelects();
+        }
+      })
+      .catch((error) => {
+        console.error(error);
+        setTtsStatus(`选择 SoVITS 权重失败：${String(error)}`, "alert");
+      });
+  });
+
+  ttsRefAudioSelect.addEventListener("change", () => {
+    if (ttsRefAudioSelect.value) {
+      applyRefAudioSelection(ttsRefAudioSelect.value);
+    }
+  });
+
+  ttsRefAudioPathInput.addEventListener("change", () => {
+    renderTtsAssetSelects();
+  });
+
+  ttsRefAudioPickButton.addEventListener("click", () => {
+    void pickTtsPath("refAudio", ttsRefAudioPathInput.value)
+      .then((path) => {
+        if (path) {
+          applyRefAudioSelection(path);
+          renderTtsAssetSelects();
+        }
+      })
+      .catch((error) => {
+        console.error(error);
+        setTtsStatus(`选择参考音频失败：${String(error)}`, "alert");
+      });
+  });
+
+  ttsAssetsRefreshButton.addEventListener("click", () => {
+    void refreshTtsAssetCatalog(true);
   });
 
   ttsManagedPortInput.addEventListener("input", () => {

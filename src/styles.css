@@ -326,6 +326,19 @@ button {
   line-height: 1.45;
 }
 
+.settings-path-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-path-row .settings-btn {
+  min-width: 58px;
+  padding: 10px 12px;
+  white-space: nowrap;
+}
+
 .settings-grid {
   display: grid;
   gap: 10px;

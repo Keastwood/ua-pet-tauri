@@ -150,30 +150,48 @@
                 </label>
 
                 <div class="settings-grid settings-grid--two" data-tts-managed-field>
-                  <label class="settings-field">
+                  <div class="settings-field">
                     <span>GPT-SoVITS 根目录</span>
-                    <input id="tts-managed-root-input" type="text" autocomplete="off" spellcheck="false" placeholder="D:\pyprojects\GPT-SoVITS" />
-                  </label>
+                    <div class="settings-path-row">
+                      <input id="tts-managed-root-input" type="text" autocomplete="off" spellcheck="false" placeholder="D:\pyprojects\GPT-SoVITS" />
+                      <button id="tts-managed-root-pick-btn" class="settings-btn" type="button">选择</button>
+                    </div>
+                  </div>
                   <label class="settings-field">
                     <span>本地端口</span>
                     <input id="tts-managed-port-input" type="number" min="1" max="65535" step="1" value="9880" />
                   </label>
                 </div>
 
-                <label class="settings-field" data-tts-managed-field>
+                <div class="settings-field" data-tts-managed-field>
                   <span>Python 路径</span>
-                  <input id="tts-managed-python-input" type="text" autocomplete="off" spellcheck="false" placeholder="D:\pyprojects\GPT-SoVITS\runtime\python.exe" />
-                </label>
+                  <div class="settings-path-row">
+                    <input id="tts-managed-python-input" type="text" autocomplete="off" spellcheck="false" placeholder="D:\pyprojects\GPT-SoVITS\runtime\python.exe" />
+                    <button id="tts-managed-python-pick-btn" class="settings-btn" type="button">选择</button>
+                  </div>
+                </div>
 
-                <label class="settings-field" data-tts-managed-field>
+                <div class="settings-field" data-tts-managed-field>
                   <span>GPT 权重</span>
-                  <input id="tts-gpt-weight-path-input" type="text" autocomplete="off" spellcheck="false" placeholder="GPT_weights_v2\yua-s-v2-e50.ckpt" />
-                </label>
+                  <select id="tts-gpt-weight-select" class="skin-importer__select" aria-label="选择 GPT 权重"></select>
+                  <div class="settings-path-row">
+                    <input id="tts-gpt-weight-path-input" type="text" autocomplete="off" spellcheck="false" placeholder="GPT_weights_v2\yua-s-v2-e50.ckpt" />
+                    <button id="tts-gpt-weight-pick-btn" class="settings-btn" type="button">选择</button>
+                  </div>
+                </div>
 
-                <label class="settings-field" data-tts-managed-field>
+                <div class="settings-field" data-tts-managed-field>
                   <span>SoVITS 权重</span>
-                  <input id="tts-sovits-weight-path-input" type="text" autocomplete="off" spellcheck="false" placeholder="SoVITS_weights_v2\yua-s-v2_e24_s672.pth" />
-                </label>
+                  <select id="tts-sovits-weight-select" class="skin-importer__select" aria-label="选择 SoVITS 权重"></select>
+                  <div class="settings-path-row">
+                    <input id="tts-sovits-weight-path-input" type="text" autocomplete="off" spellcheck="false" placeholder="SoVITS_weights_v2\yua-s-v2_e24_s672.pth" />
+                    <button id="tts-sovits-weight-pick-btn" class="settings-btn" type="button">选择</button>
+                  </div>
+                </div>
+
+                <div class="settings-actions" data-tts-managed-field>
+                  <button id="tts-assets-refresh-btn" class="settings-btn" type="button">刷新模型/音频列表</button>
+                </div>
 
                 <div class="settings-grid settings-grid--two">
                   <label class="settings-field">
@@ -218,10 +236,14 @@
                   </label>
                 </div>
 
-                <label class="settings-field">
+                <div class="settings-field">
                   <span>GPT-SoVITS 参考音频路径</span>
-                  <input id="tts-ref-audio-path-input" type="text" autocomplete="off" spellcheck="false" placeholder="服务器上的 reference.wav 路径" />
-                </label>
+                  <select id="tts-ref-audio-select" class="skin-importer__select" aria-label="选择参考音频"></select>
+                  <div class="settings-path-row">
+                    <input id="tts-ref-audio-path-input" type="text" autocomplete="off" spellcheck="false" placeholder="服务器上的 reference.wav 路径" />
+                    <button id="tts-ref-audio-pick-btn" class="settings-btn" type="button">选择</button>
+                  </div>
+                </div>
 
                 <label class="settings-field">
                   <span>参考音频文本</span>
