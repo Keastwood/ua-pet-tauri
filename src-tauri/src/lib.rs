@@ -2854,7 +2854,28 @@ fn close_current_window(_window: Window) -> Result<(), String> {
 #[tauri::command]
 #[cfg(not(mobile))]
 fn close_pet(app: AppHandle) -> Result<(), String> {
-    app.exit(0);
+    let mut close_error = None;
+
+    for label in ["mask-editor", "settings-menu", "main"] {
+        if let Some(window) = app.get_webview_window(label) {
+            if let Err(error) = window.close() {
+                close_error.get_or_insert_with(|| format!("关闭窗口 {label} 失败：{error}"));
+            }
+        }
+    }
+
+    let app_for_fallback = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(900));
+        if !app_for_fallback.webview_windows().is_empty() {
+            app_for_fallback.exit(0);
+        }
+    });
+
+    if let Some(error) = close_error {
+        return Err(error);
+    }
+
     Ok(())
 }
 
