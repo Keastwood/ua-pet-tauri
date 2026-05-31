@@ -3600,15 +3600,18 @@ fn show_settings_window(app: &AppHandle) -> Result<(), String> {
         .title("Silver Pet Settings")
         .inner_size(SETTINGS_WINDOW_WIDTH, SETTINGS_WINDOW_HEIGHT)
         .min_inner_size(760.0, 620.0)
+        .center()
         .resizable(true)
         .decorations(true)
         .transparent(false)
         .always_on_top(false)
         .skip_taskbar(false)
-        .visible(true)
+        .visible(false)
         .build()
         .map_err(|error| error.to_string())?;
 
+    let _ = window.center();
+    window.show().map_err(|error| error.to_string())?;
     window.set_focus().map_err(|error| error.to_string())
 }
 
