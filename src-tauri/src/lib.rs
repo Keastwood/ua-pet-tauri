@@ -21,6 +21,8 @@ use tauri::{
 #[cfg(not(mobile))]
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 #[cfg(windows)]
+use tauri_plugin_opener::OpenerExt;
+#[cfg(windows)]
 use windows::{
     core::{Ref, HSTRING},
     Foundation::TypedEventHandler,
@@ -1570,6 +1572,17 @@ fn windows_error(error: windows::core::Error) -> String {
 }
 
 #[cfg(windows)]
+fn native_speech_error_message(error: windows::core::Error) -> String {
+    let message = windows_error(error);
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("speech privacy policy") || lower.contains("privacy") {
+        "Windows 尚未允许此应用使用语音识别。请打开 Windows 设置 > 隐私和安全性 > 语音，接受语音隐私策略并开启联机语音识别，然后重启桌宠监听。".to_string()
+    } else {
+        message
+    }
+}
+
+#[cfg(windows)]
 fn speech_status_label(status: SpeechRecognitionResultStatus) -> &'static str {
     if status == SpeechRecognitionResultStatus::Success {
         "success"
@@ -2376,9 +2389,9 @@ fn start_native_speech_recognition(
 
     session
         .StartWithModeAsync(SpeechContinuousRecognitionMode::Default)
-        .map_err(windows_error)?
+        .map_err(native_speech_error_message)?
         .get()
-        .map_err(windows_error)?;
+        .map_err(native_speech_error_message)?;
 
     *native_speech
         .session
@@ -2419,6 +2432,20 @@ fn stop_native_speech_recognition(
 #[cfg(not(windows))]
 fn stop_native_speech_recognition() -> Result<(), String> {
     Ok(())
+}
+
+#[tauri::command]
+#[cfg(windows)]
+fn open_windows_speech_privacy_settings(app: AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url("ms-settings:privacy-speech", None::<&str>)
+        .map_err(|error| format!("打开 Windows 语音隐私设置失败：{error}"))
+}
+
+#[tauri::command]
+#[cfg(not(windows))]
+fn open_windows_speech_privacy_settings(_app: AppHandle) -> Result<(), String> {
+    Err("Windows 语音隐私设置只支持 Windows。".to_string())
 }
 
 #[tauri::command]
@@ -3691,6 +3718,7 @@ pub fn run() {
             move_pet_window,
             open_mask_editor,
             open_settings_menu,
+            open_windows_speech_privacy_settings,
             resize_pet_window,
             set_pet_always_on_top,
             set_pet_ignore_cursor_events,

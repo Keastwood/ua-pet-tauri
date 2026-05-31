@@ -1197,6 +1197,7 @@ window.addEventListener("DOMContentLoaded", () => {
   const voiceSensitivityValue = must<HTMLElement>("#voice-sensitivity-value");
   const voiceStatus = must<HTMLParagraphElement>("#voice-status");
   const voiceTestButton = must<HTMLButtonElement>("#voice-test-btn");
+  const voicePrivacyButton = must<HTMLButtonElement>("#voice-privacy-btn");
   const voiceRestartButton = must<HTMLButtonElement>("#voice-restart-btn");
   const ttsEnabledInput = must<HTMLInputElement>("#tts-enabled-input");
   const ttsProviderSelect = must<HTMLSelectElement>("#tts-provider-select");
@@ -5319,6 +5320,17 @@ window.addEventListener("DOMContentLoaded", () => {
       .catch((error) => {
         console.error(error);
         setVoiceStatus(`麦克风测试失败：${String(error)}`, "alert");
+      });
+  });
+
+  voicePrivacyButton.addEventListener("click", () => {
+    void invoke("open_windows_speech_privacy_settings")
+      .then(() => {
+        setVoiceStatus("已打开 Windows 语音隐私设置。请接受语音隐私策略并开启联机语音识别，然后重启监听。", "idle");
+      })
+      .catch((error) => {
+        console.error(error);
+        setVoiceStatus(`打开语音隐私设置失败：${String(error)}`, "alert");
       });
   });
 
