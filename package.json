@@ -13,7 +13,8 @@
     "tauri": "tauri",
     "android:init": "tauri android init",
     "android:dev": "tauri android dev",
-    "android:build": "tauri android build"
+    "android:build": "tauri android build",
+    "tauri:inspect": "node scripts/inspect-tauri-runtime.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

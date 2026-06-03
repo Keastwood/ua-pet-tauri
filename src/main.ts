@@ -69,6 +69,7 @@ interface WindowPosition {
   x: number;
   y: number;
   windowWidth?: number;
+  windowHeight?: number;
   physicalX?: number;
   physicalY?: number;
 }
@@ -355,6 +356,8 @@ const PET_SKIN_PROMPTS_STORAGE_KEY = "silver-pet.skin-prompts.v1";
 const PET_HIDDEN_SKINS_STORAGE_KEY = "silver-pet.hidden-skins.v1";
 const PET_FAVORITE_SKINS_STORAGE_KEY = "silver-pet.favorite-skins.v1";
 const PET_BODY_MASKS_STORAGE_KEY = "silver-pet.body-masks.v1";
+const PET_ALPHA_VISIBLE_THRESHOLD = 8;
+const PET_ALPHA_HIT_RADIUS_PX = 18;
 const VOICE_ENABLED_STORAGE_KEY = "silver-pet.voice-enabled.v1";
 const VOICE_SENSITIVITY_STORAGE_KEY = "silver-pet.voice-sensitivity.v1";
 const VOICE_LANGUAGE_STORAGE_KEY = "silver-pet.voice-language.v1";
@@ -1055,6 +1058,11 @@ function clearTimer(timer: number | undefined): void {
   }
 }
 
+function setInspectableImageSource(image: HTMLImageElement, src: string): void {
+  image.crossOrigin = "anonymous";
+  image.src = src;
+}
+
 function clampScale(scale: number): number {
   if (!Number.isFinite(scale)) {
     return 1;
@@ -1115,8 +1123,39 @@ async function getPetWindowPosition(): Promise<WindowPosition> {
   return invoke<WindowPosition>("get_pet_window_position");
 }
 
+function normalizeCursorPositionForViewport(position: WindowPosition): WindowPosition {
+  if (
+    position.physicalX === undefined ||
+    position.physicalY === undefined ||
+    position.windowWidth === undefined ||
+    position.windowHeight === undefined ||
+    !Number.isFinite(position.physicalX) ||
+    !Number.isFinite(position.physicalY) ||
+    !Number.isFinite(position.windowWidth) ||
+    !Number.isFinite(position.windowHeight) ||
+    position.windowWidth <= 0 ||
+    position.windowHeight <= 0 ||
+    window.innerWidth <= 0 ||
+    window.innerHeight <= 0
+  ) {
+    return position;
+  }
+
+  const physicalToCssX = position.windowWidth / window.innerWidth;
+  const physicalToCssY = position.windowHeight / window.innerHeight;
+  if (!Number.isFinite(physicalToCssX) || !Number.isFinite(physicalToCssY) || physicalToCssX <= 0 || physicalToCssY <= 0) {
+    return position;
+  }
+
+  return {
+    ...position,
+    x: position.physicalX / physicalToCssX,
+    y: position.physicalY / physicalToCssY,
+  };
+}
+
 async function getPetCursorPosition(): Promise<WindowPosition> {
-  return invoke<WindowPosition>("get_pet_cursor_position");
+  return normalizeCursorPositionForViewport(await invoke<WindowPosition>("get_pet_cursor_position"));
 }
 
 async function setPetIgnoreCursorEvents(ignore: boolean): Promise<void> {
@@ -1584,7 +1623,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     for (const src of sources) {
       const image = new Image();
-      image.src = src;
+      setInspectableImageSource(image, src);
     }
   }
 
@@ -1647,9 +1686,9 @@ window.addEventListener("DOMContentLoaded", () => {
     petRoot.style.setProperty("--mouth-mask-y", skin.layout === "fullBody" ? "37.4%" : "42.7%");
     petRoot.style.setProperty("--mouth-mask-width", skin.layout === "fullBody" ? "8.8%" : "9.8%");
     petRoot.style.setProperty("--mouth-mask-height", skin.layout === "fullBody" ? "2.5%" : "2.8%");
-    blinkLayer.src = skin.images.blink;
-    talkLayer.src = skin.images.mouthTalk;
-    mouthOLayer.src = skin.images.mouthO;
+    setInspectableImageSource(blinkLayer, skin.images.blink);
+    setInspectableImageSource(talkLayer, skin.images.mouthTalk);
+    setInspectableImageSource(mouthOLayer, skin.images.mouthO);
     setBaseExpression(state.surprised ? "surprised" : "idle");
     void refreshPetAlphaMaskFromLoadedImage(skin, requestId);
     preloadSkin(skin);
@@ -2056,7 +2095,7 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function setBaseExpression(expression: BaseExpression): void {
-    baseLayer.src = expression === "surprised" ? activeSkin.images.surprised : activeSkin.images.idle;
+    setInspectableImageSource(baseLayer, expression === "surprised" ? activeSkin.images.surprised : activeSkin.images.idle);
     baseLayer.dataset.expression = expression;
   }
 
@@ -2084,7 +2123,7 @@ window.addEventListener("DOMContentLoaded", () => {
       button.setAttribute("aria-pressed", String(skin.id === state.selectedSkinId));
 
       const thumbnail = document.createElement("img");
-      thumbnail.src = skin.images.idle;
+      setInspectableImageSource(thumbnail, skin.images.idle);
       thumbnail.alt = "";
       thumbnail.loading = "lazy";
       button.appendChild(thumbnail);
@@ -2142,7 +2181,7 @@ window.addEventListener("DOMContentLoaded", () => {
       });
 
       const thumbnail = document.createElement("img");
-      thumbnail.src = skin.images.idle;
+      setInspectableImageSource(thumbnail, skin.images.idle);
       thumbnail.alt = "";
       thumbnail.loading = "lazy";
 
@@ -3801,6 +3840,52 @@ window.addEventListener("DOMContentLoaded", () => {
     return isPointInsideRect(point, sideDock.getBoundingClientRect());
   }
 
+  function isVisibleAlphaNear(mask: ImageData, sourceX: number, sourceY: number): boolean {
+    const directX = Math.floor(sourceX);
+    const directY = Math.floor(sourceY);
+    if (
+      directX >= 0 &&
+      directY >= 0 &&
+      directX < mask.width &&
+      directY < mask.height &&
+      mask.data[(directY * mask.width + directX) * 4 + 3] > PET_ALPHA_VISIBLE_THRESHOLD
+    ) {
+      return true;
+    }
+
+    const centerX = Math.round(sourceX);
+    const centerY = Math.round(sourceY);
+    const radius = PET_ALPHA_HIT_RADIUS_PX;
+    if (
+      centerX < -radius ||
+      centerY < -radius ||
+      centerX >= mask.width + radius ||
+      centerY >= mask.height + radius
+    ) {
+      return false;
+    }
+
+    const left = Math.max(0, centerX - radius);
+    const right = Math.min(mask.width - 1, centerX + radius);
+    const top = Math.max(0, centerY - radius);
+    const bottom = Math.min(mask.height - 1, centerY + radius);
+    const radiusSquared = radius * radius;
+    for (let y = top; y <= bottom; y += 1) {
+      const dy = y - centerY;
+      for (let x = left; x <= right; x += 1) {
+        const dx = x - centerX;
+        if (dx * dx + dy * dy > radiusSquared) {
+          continue;
+        }
+        if (mask.data[(y * mask.width + x) * 4 + 3] > PET_ALPHA_VISIBLE_THRESHOLD) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
   function isPointOverVisiblePetPixel(point: WindowPosition): boolean {
     if (!petAlphaMask) {
       return isPointInsideRect(point, petFrame.getBoundingClientRect());
@@ -3811,14 +3896,9 @@ window.addEventListener("DOMContentLoaded", () => {
       return false;
     }
 
-    const sourceX = Math.floor((imagePoint.x / petRoot.offsetWidth) * petAlphaMask.width);
-    const sourceY = Math.floor((imagePoint.y / petRoot.offsetHeight) * petAlphaMask.height);
-
-    if (sourceX < 0 || sourceY < 0 || sourceX >= petAlphaMask.width || sourceY >= petAlphaMask.height) {
-      return false;
-    }
-
-    return petAlphaMask.data[(sourceY * petAlphaMask.width + sourceX) * 4 + 3] > 8;
+    const sourceX = (imagePoint.x / petRoot.offsetWidth) * petAlphaMask.width;
+    const sourceY = (imagePoint.y / petRoot.offsetHeight) * petAlphaMask.height;
+    return isVisibleAlphaNear(petAlphaMask, sourceX, sourceY);
   }
 
   function shouldCaptureCursorAt(point: WindowPosition): boolean {

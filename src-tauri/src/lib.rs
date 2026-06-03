@@ -384,6 +384,7 @@ struct WindowPosition {
     x: f64,
     y: f64,
     window_width: Option<f64>,
+    window_height: Option<f64>,
     physical_x: Option<f64>,
     physical_y: Option<f64>,
 }
@@ -3399,6 +3400,7 @@ fn get_pet_window_position(window: Window) -> Result<WindowPosition, String> {
         x: position.x as f64 / scale_factor,
         y: position.y as f64 / scale_factor,
         window_width: None,
+        window_height: None,
         physical_x: None,
         physical_y: None,
     })
@@ -3411,6 +3413,7 @@ fn get_pet_window_position(_window: Window) -> Result<WindowPosition, String> {
         x: 0.0,
         y: 0.0,
         window_width: None,
+        window_height: None,
         physical_x: None,
         physical_y: None,
     })
@@ -3420,8 +3423,8 @@ fn get_pet_window_position(_window: Window) -> Result<WindowPosition, String> {
 #[cfg(not(mobile))]
 fn get_pet_cursor_position(window: Window) -> Result<WindowPosition, String> {
     let scale_factor = window.scale_factor().map_err(|error| error.to_string())?;
-    let window_position = window.outer_position().map_err(|error| error.to_string())?;
-    let window_size = window.outer_size().map_err(|error| error.to_string())?;
+    let window_position = window.inner_position().map_err(|error| error.to_string())?;
+    let window_size = window.inner_size().map_err(|error| error.to_string())?;
     let physical_position = global_cursor_position_physical();
     let (x, y) = if let Some((physical_x, physical_y)) = physical_position {
         (
@@ -3442,6 +3445,7 @@ fn get_pet_cursor_position(window: Window) -> Result<WindowPosition, String> {
         x,
         y,
         window_width: Some(f64::from(window_size.width)),
+        window_height: Some(f64::from(window_size.height)),
         physical_x: physical_position.map(|(x, _)| x - f64::from(window_position.x)),
         physical_y: physical_position.map(|(_, y)| y - f64::from(window_position.y)),
     })
@@ -3454,6 +3458,7 @@ fn get_pet_cursor_position(_window: Window) -> Result<WindowPosition, String> {
         x: 0.0,
         y: 0.0,
         window_width: None,
+        window_height: None,
         physical_x: None,
         physical_y: None,
     })
