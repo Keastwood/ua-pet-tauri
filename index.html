@@ -42,6 +42,7 @@
             <div class="settings-tabs" role="tablist" aria-label="设置分类">
               <button class="settings-tab-btn" type="button" data-settings-tab="llm" aria-selected="true">LLM</button>
               <button class="settings-tab-btn" type="button" data-settings-tab="voice" aria-selected="false">语音</button>
+              <button class="settings-tab-btn" type="button" data-settings-tab="monitor" aria-selected="false">监控</button>
               <button class="settings-tab-btn" type="button" data-settings-tab="skin" aria-selected="false">皮肤</button>
               <button class="settings-tab-btn" type="button" data-settings-tab="display" aria-selected="false">显示</button>
             </div>
@@ -118,6 +119,44 @@
                 <div class="settings-actions settings-actions--spread">
                   <button id="voice-test-btn" class="settings-btn" type="button">测试麦克风</button>
                   <button id="voice-restart-btn" class="settings-btn" type="button">重启监听</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="settings-section" data-settings-section="monitor" hidden>
+              <div class="settings-subcard">
+                <h3>局域网监控插件</h3>
+                <label class="settings-check">
+                  <input id="monitor-enabled-input" type="checkbox" />
+                  <span>接收监控服务的新事件</span>
+                </label>
+
+                <label class="settings-field">
+                  <span>服务地址</span>
+                  <input
+                    id="monitor-base-url-input"
+                    type="url"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="http://192.168.50.13:8012"
+                  />
+                </label>
+
+                <label class="settings-field">
+                  <span>配对令牌</span>
+                  <input id="monitor-token-input" type="password" autocomplete="off" spellcheck="false" />
+                </label>
+
+                <label class="settings-check">
+                  <input id="monitor-notifications-input" type="checkbox" />
+                  <span>同时显示 Windows 系统通知</span>
+                </label>
+
+                <p id="monitor-status" class="settings-status" data-tone="idle">填写 Mac 启动窗口显示的地址和令牌。</p>
+
+                <div class="settings-actions">
+                  <button id="monitor-test-btn" class="settings-btn" type="button">测试连接</button>
+                  <button id="monitor-save-btn" class="settings-btn settings-btn--primary" type="button">保存并连接</button>
                 </div>
               </div>
             </section>

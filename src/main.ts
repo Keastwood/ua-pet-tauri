@@ -1,6 +1,12 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+import {
+  formatMonitorEvent,
+  MonitorPlugin,
+  type MonitorPluginConfig,
+  type MonitorStatus,
+} from "./plugins/monitor";
 import { DEFAULT_PET_SKIN_ID, PET_SKINS as BUILT_IN_PET_SKINS, getPetSkin as getBuiltInPetSkin } from "./skins";
 import type { PetSkinDefinition, PetSkinLayoutId } from "./skinTypes";
 
@@ -603,6 +609,13 @@ window.addEventListener("DOMContentLoaded", () => {
   const voiceStatus = must<HTMLParagraphElement>("#voice-status");
   const voiceTestButton = must<HTMLButtonElement>("#voice-test-btn");
   const voiceRestartButton = must<HTMLButtonElement>("#voice-restart-btn");
+  const monitorEnabledInput = must<HTMLInputElement>("#monitor-enabled-input");
+  const monitorBaseUrlInput = must<HTMLInputElement>("#monitor-base-url-input");
+  const monitorTokenInput = must<HTMLInputElement>("#monitor-token-input");
+  const monitorNotificationsInput = must<HTMLInputElement>("#monitor-notifications-input");
+  const monitorStatus = must<HTMLParagraphElement>("#monitor-status");
+  const monitorTestButton = must<HTMLButtonElement>("#monitor-test-btn");
+  const monitorSaveButton = must<HTMLButtonElement>("#monitor-save-btn");
   const affectionValue = must<HTMLSpanElement>("#affection-value");
   const moodValue = must<HTMLSpanElement>("#mood-value");
   const scaleValue = must<HTMLSpanElement>("#scale-value");
@@ -660,6 +673,14 @@ window.addEventListener("DOMContentLoaded", () => {
       }
     | null = null;
   let suppressNextHitboxClick = false;
+  const monitorPlugin = new MonitorPlugin({
+    onStatus: (status) => {
+      renderMonitorStatus(status);
+    },
+    onEvent: (event) => {
+      startSurprise(formatMonitorEvent(event), 4200);
+    },
+  });
   const quickActionIcons = {
     chat:
       '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.2 17.2 4 21l4.7-1.4c1 .4 2.1.6 3.3.6 5 0 9-3.3 9-7.4s-4-7.4-9-7.4-9 3.3-9 7.4c0 1.7.7 3.3 1.9 4.4Z"/><path d="M8 11.2h8M8 14h5.6"/></svg>',
@@ -1567,6 +1588,87 @@ window.addEventListener("DOMContentLoaded", () => {
     settingsCloseButton.disabled = busy;
   }
 
+  function renderMonitorStatus(status: MonitorStatus): void {
+    monitorStatus.textContent = status.message;
+    monitorStatus.dataset.tone =
+      status.state === "connected"
+        ? "warm"
+        : status.state === "error"
+          ? "alert"
+          : "idle";
+  }
+
+  function syncMonitorControls(): void {
+    const config = monitorPlugin.getConfig();
+    monitorEnabledInput.checked = config.enabled;
+    monitorBaseUrlInput.value = config.baseUrl;
+    monitorTokenInput.value = config.token;
+    monitorNotificationsInput.checked = config.desktopNotifications;
+  }
+
+  function readMonitorForm(requireToken = false): MonitorPluginConfig {
+    const baseUrl = monitorBaseUrlInput.value.trim();
+    const token = monitorTokenInput.value.trim();
+    if (!baseUrl) {
+      throw new Error("请填写服务地址");
+    }
+    const parsedUrl = new URL(baseUrl);
+    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+      throw new Error("服务地址必须以 http:// 或 https:// 开头");
+    }
+    if ((monitorEnabledInput.checked || requireToken) && !token) {
+      throw new Error("请填写配对令牌");
+    }
+    return {
+      enabled: monitorEnabledInput.checked,
+      baseUrl,
+      token,
+      desktopNotifications: monitorNotificationsInput.checked,
+    };
+  }
+
+  function setMonitorBusy(busy: boolean): void {
+    monitorTestButton.disabled = busy;
+    monitorSaveButton.disabled = busy;
+  }
+
+  async function saveMonitorSettings(): Promise<void> {
+    setMonitorBusy(true);
+    try {
+      const config = readMonitorForm();
+      await monitorPlugin.saveConfig(config);
+      setBubble(
+        config.enabled ? "监控插件已保存，连接会自动保持。" : "监控插件已关闭。",
+        "hint",
+        2200,
+      );
+    } catch (error) {
+      console.error(error);
+      renderMonitorStatus({ state: "error", message: String(error) });
+    } finally {
+      setMonitorBusy(false);
+    }
+  }
+
+  async function testMonitorConnection(): Promise<void> {
+    setMonitorBusy(true);
+    renderMonitorStatus({ state: "connecting", message: "正在测试监控服务..." });
+    try {
+      const config = readMonitorForm(true);
+      const result = await monitorPlugin.testConnection(config);
+      renderMonitorStatus({
+        state: "connected",
+        message: `连接成功：${result.service}（协议 v${result.protocolVersion}）`,
+      });
+      setBubble("Mac 监控服务连接正常。", "hint", 1800);
+    } catch (error) {
+      console.error(error);
+      renderMonitorStatus({ state: "error", message: `连接失败：${String(error)}` });
+    } finally {
+      setMonitorBusy(false);
+    }
+  }
+
   function applyLlmConfig(config: LlmConfigView): void {
     llmApiKeyInput.value = "";
     llmApiKeyInput.placeholder = config.hasApiKey
@@ -1599,6 +1701,7 @@ window.addEventListener("DOMContentLoaded", () => {
     renderSkinPromptOptions();
     renderSkinDeleteOptions();
     syncVoiceControls();
+    syncMonitorControls();
     void loadLlmSettings();
   }
 
@@ -2466,6 +2569,14 @@ window.addEventListener("DOMContentLoaded", () => {
     void testLlmSettings();
   });
 
+  monitorSaveButton.addEventListener("click", () => {
+    void saveMonitorSettings();
+  });
+
+  monitorTestButton.addEventListener("click", () => {
+    void testMonitorConnection();
+  });
+
   voiceEnabledInput.addEventListener("change", () => {
     if (voiceEnabledInput.checked) {
       void startVoiceRecognition({ announce: true });
@@ -2685,11 +2796,13 @@ window.addEventListener("DOMContentLoaded", () => {
   setInteractionTool(savedInteractionTool, { persist: false });
   state.voiceEnabled = savedVoiceEnabled;
   syncVoiceControls();
+  syncMonitorControls();
   if (savedVoiceEnabled) {
     void startVoiceRecognition({ persist: false, announce: false });
   }
   void applyScale(savedScale, { persist: false, showBubble: false, ensureDocked: true });
   void loadCustomPetSkins(savedSkin);
+  void monitorPlugin.start();
 
   void listen("pet-open-input", () => {
     openFloatingInput();
@@ -2698,4 +2811,8 @@ window.addEventListener("DOMContentLoaded", () => {
   setBubble("可以拖动我，也可以用滚轮或 +/- 调整大小。", "hint", 3400);
   scheduleBlink();
   startIdleChatter();
+
+  window.addEventListener("beforeunload", () => {
+    monitorPlugin.destroy();
+  });
 });
